@@ -1,0 +1,164 @@
+; =====================================================================
+; Tera Term Macro Script: PA-440 RULEBASE CLEANUP (Clean Slate)
+; Purpose: Delete ALL security + NAT rules by name so a subsequent
+;          clean run of pa440.ttl lands on a blank, correctly-ordered
+;          rulebase (set-based config is additive, so stale rules from
+;          prior runs must be explicitly removed).
+;
+; Notes:
+;  - Waits on '[edit]' (the PAN-OS config-mode marker printed after each
+;    command) instead of '#', which also appears inside the login banner
+;    and mid-output and caused premature sends / command collisions.
+;  - 'delete rulebase security rules <name>' on a non-existent rule is
+;    harmless (PAN-OS reports it and continues), so this is safe to run
+;    even if some rules were already removed manually.
+;  - Scope: deletes security rules, NAT rules, address-groups, address
+;    objects, and the custom service objects that pa440.ttl recreates.
+;    This clears stale members (e.g. DSW1-IP/DSW2-IP) that accumulate from
+;    PAN-OS additive set-merges. Interfaces, zones, VR/OSPF, and mgmt/AAA
+;    are left intact (they are idempotent on re-run and safe to re-apply).
+;  - Deletion order matters: rules first (they reference objects), then
+;    address-groups (they reference addresses), then addresses and services.
+; =====================================================================
+
+; Connect and enter configuration mode
+wait '>'
+sendln 'configure'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 1. DELETE SECURITY RULES (current macro rules)
+; ---------------------------------------------------------------------
+sendln 'delete rulebase security rules INBOUND-WEB'
+wait '[edit]'
+sendln 'delete rulebase security rules INBOUND-DNS'
+wait '[edit]'
+sendln 'delete rulebase security rules JUMP-SSH-IN'
+wait '[edit]'
+sendln 'delete rulebase security rules INTERNAL-TO-DNS'
+wait '[edit]'
+sendln 'delete rulebase security rules INTERNAL-TO-WEB'
+wait '[edit]'
+sendln 'delete rulebase security rules IT-TO-JUMP-SSH'
+wait '[edit]'
+sendln 'delete rulebase security rules PTSO-HR-TO-FILE'
+wait '[edit]'
+sendln 'delete rulebase security rules PTSO-STAFF-ATM-SVR'
+wait '[edit]'
+sendln 'delete rulebase security rules HR-IT-INTERNET'
+wait '[edit]'
+sendln 'delete rulebase security rules TXN-INTERNET-TIMED'
+wait '[edit]'
+sendln 'delete rulebase security rules DMZ-OUTBOUND-NTP'
+wait '[edit]'
+sendln 'delete rulebase security rules DENY-ALL'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 2. DELETE SECURITY RULES (stale rules from prior macro versions)
+; ---------------------------------------------------------------------
+sendln 'delete rulebase security rules ALLOW-OSPF'
+wait '[edit]'
+sendln 'delete rulebase security rules DMZ-WEB-IN'
+wait '[edit]'
+sendln 'delete rulebase security rules DMZ-DNS-IN'
+wait '[edit]'
+sendln 'delete rulebase security rules PTSO-DHCP-RELAY'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 3. DELETE NAT RULES
+; ---------------------------------------------------------------------
+sendln 'delete rulebase nat rules NAT-WEB'
+wait '[edit]'
+sendln 'delete rulebase nat rules NAT-DNS'
+wait '[edit]'
+sendln 'delete rulebase nat rules NAT-JUMP-SSH'
+wait '[edit]'
+sendln 'delete rulebase nat rules NAT-OUTBOUND'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 4. DELETE ADDRESS-GROUPS (must be removed BEFORE their member addresses,
+;    and AFTER the rules above that reference them). This also clears stale
+;    members like DSW1-IP/DSW2-IP that accumulated from prior additive runs.
+; ---------------------------------------------------------------------
+sendln 'delete address-group STAFF-ATM'
+wait '[edit]'
+sendln 'delete address-group HR-IT'
+wait '[edit]'
+sendln 'delete address-group INTERNET-USERS'
+wait '[edit]'
+sendln 'delete address-group DSWs'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 5. DELETE ADDRESS OBJECTS (includes stale DSW1-IP/DSW2-IP from old runs)
+; ---------------------------------------------------------------------
+sendln 'delete address STAFF'
+wait '[edit]'
+sendln 'delete address ATM'
+wait '[edit]'
+sendln 'delete address HR-NET'
+wait '[edit]'
+sendln 'delete address IT-NET'
+wait '[edit]'
+sendln 'delete address SERVERS'
+wait '[edit]'
+sendln 'delete address DMZ-SUBNET'
+wait '[edit]'
+sendln 'delete address FILE-SVR'
+wait '[edit]'
+sendln 'delete address ACCT-SVR'
+wait '[edit]'
+sendln 'delete address TXN-SVR'
+wait '[edit]'
+sendln 'delete address DHCP-SVR'
+wait '[edit]'
+sendln 'delete address WEB-SVR'
+wait '[edit]'
+sendln 'delete address DNS-SVR'
+wait '[edit]'
+sendln 'delete address JUMP-SVR'
+wait '[edit]'
+sendln 'delete address JUMP2-SVR'
+wait '[edit]'
+sendln 'delete address PUB-PAT'
+wait '[edit]'
+sendln 'delete address PUB-WEB'
+wait '[edit]'
+sendln 'delete address PUB-DNS'
+wait '[edit]'
+sendln 'delete address DSW1-SVI'
+wait '[edit]'
+sendln 'delete address DSW2-SVI'
+wait '[edit]'
+; Stale objects from earlier macro versions (safe if they do not exist):
+sendln 'delete address DSW1-IP'
+wait '[edit]'
+sendln 'delete address DSW2-IP'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 6. DELETE SERVICE OBJECTS recreated by the main macro
+; ---------------------------------------------------------------------
+sendln 'delete service TCP-2222'
+wait '[edit]'
+sendln 'delete service UDP-67'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 7. VERIFY (optional visual check) & COMMIT
+; ---------------------------------------------------------------------
+sendln 'show rulebase security rules'
+wait '[edit]'
+sendln 'show rulebase nat rules'
+wait '[edit]'
+sendln 'show address'
+wait '[edit]'
+sendln 'show address-group'
+wait '[edit]'
+
+sendln 'commit'
+wait 'Configuration committed successfully'
+sendln 'exit'

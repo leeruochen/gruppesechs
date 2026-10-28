@@ -1,0 +1,384 @@
+; =====================================================================
+; Tera Term Macro Script for Palo Alto PA-440 NGFW Configuration
+; Architecture: Full PTSO with Clean Factory Erase & Non-conflicting Objects
+; Target: PA-440 (gruppesechs.sitict.net)
+; =====================================================================
+
+; Connect and enter configuration mode
+wait '>'
+sendln 'configure'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 1. FACTORY DEFAULT CLEANUP (Avoid locks, clashes, and references)
+; ---------------------------------------------------------------------
+; Remove default factory security rule referencing 'trust'
+sendln 'delete rulebase security rules rule1'
+wait '[edit]'
+
+; Delete default virtual-wire and associated factory zones
+sendln 'delete network virtual-wire default-vwire'
+wait '[edit]'
+sendln 'delete zone trust'
+wait '[edit]'
+sendln 'delete zone untrust'
+wait '[edit]'
+
+; Clear interfaces from any residual virtual-wire or L3 bindings
+sendln 'delete network interface ethernet ethernet1/1 virtual-wire'
+wait '[edit]'
+sendln 'delete network interface ethernet ethernet1/2 virtual-wire'
+wait '[edit]'
+sendln 'delete network interface ethernet ethernet1/2 layer3'
+wait '[edit]'
+sendln 'delete network virtual-router default interface ethernet1/1'
+wait '[edit]'
+sendln 'delete network virtual-router default interface ethernet1/2'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 2. BASE SYSTEM SETTINGS & RBAC ACCOUNTS
+; ---------------------------------------------------------------------
+sendln 'set deviceconfig system hostname PA-440'
+wait '[edit]'
+sendln 'set deviceconfig system domain gruppesechs.sitict.net'
+wait '[edit]'
+sendln 'set deviceconfig system login-banner "WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS PA-440 IS PROHIBITED."'
+wait '[edit]'
+
+; Out-Of-Band Management Configuration
+sendln 'set deviceconfig system type static ip-address 172.16.0.41 netmask 255.255.255.240 default-gateway 172.16.0.33'
+wait '[edit]'
+sendln 'set deviceconfig system service disable-telnet yes disable-http yes disable-ssh no disable-https no'
+wait '[edit]'
+
+; Permitted OOB Management IPs (One-by-one syntax)
+sendln 'set deviceconfig system permitted-ip 172.16.0.44/32'
+wait '[edit]'
+sendln 'set deviceconfig system permitted-ip 172.16.0.45/32'
+wait '[edit]'
+
+; NTP Servers
+sendln 'set deviceconfig system ntp-servers primary-ntp-server ntp-server-address 172.16.0.44'
+wait '[edit]'
+sendln 'set deviceconfig system ntp-servers secondary-ntp-server ntp-server-address 172.16.0.45'
+wait '[edit]'
+
+; Local Administrator Accounts
+sendln 'set mgt-config users bigDonkBonkAdmin permissions role-based superuser yes'
+wait '[edit]'
+sendln 'set mgt-config users bigDonkBonkAdmin password'
+wait 'Enter password   :'
+sendln 'Venison2Beef'
+wait 'Confirm password :'
+sendln 'Venison2Beef'
+wait '[edit]'
+
+sendln 'set mgt-config users donkBonkEng1 permissions role-based superreader yes'
+wait '[edit]'
+sendln 'set mgt-config users donkBonkEng1 password'
+wait 'Enter password   :'
+sendln 'Beef2Venison'
+wait 'Confirm password :'
+sendln 'Beef2Venison'
+wait '[edit]'
+
+sendln 'set mgt-config users donkBonkEng2 permissions role-based superreader yes'
+wait '[edit]'
+sendln 'set mgt-config users donkBonkEng2 password'
+wait 'Enter password   :'
+sendln 'Beef3Venison'
+wait 'Confirm password :'
+sendln 'Beef3Venison'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 3. INTERFACE MANAGEMENT PROFILES
+; ---------------------------------------------------------------------
+sendln 'set network profiles interface-management-profile PING-ONLY ping yes'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 4. PHYSICAL & LOGICAL INTERFACES
+; ---------------------------------------------------------------------
+; Physical port Ethernet1/1 (Unused - Admin Down)
+sendln 'set network interface ethernet ethernet1/1 link-state down'
+wait '[edit]'
+
+; Primary Serial Link to ASA Ethernet1/1 (Routed L3 - Cost 10)
+sendln 'set network interface ethernet ethernet1/3 layer3 ip 172.16.0.105/30'
+wait '[edit]'
+sendln 'set network interface ethernet ethernet1/3 layer3 interface-management-profile PING-ONLY'
+wait '[edit]'
+
+; Layer 2 Switched Trunk Ports for PTSO & Server Redundancy
+sendln 'set network interface ethernet ethernet1/2 layer2 lldp enable no'
+wait '[edit]'
+sendln 'set network interface ethernet ethernet1/4 layer2 lldp enable no'
+wait '[edit]'
+sendln 'set network interface ethernet ethernet1/5 layer2 lldp enable no'
+wait '[edit]'
+sendln 'set network interface ethernet ethernet1/6 layer2 lldp enable no'
+wait '[edit]'
+sendln 'set network interface ethernet ethernet1/7 layer2 lldp enable no'
+wait '[edit]'
+sendln 'set network interface ethernet ethernet1/8 layer2 lldp enable no'
+wait '[edit]'
+
+; CRITICAL (PTSO loop prevention): the inside-bypass ports eth1/6 (DSW1 G1/0/12)
+; and eth1/7 (DSW2 G1/0/12) bridge into vlan.100. Because both DSWs also trunk
+; VLAN 100 to each other (Po5) and to the ASA, leaving these two ports UP forms
+; a Layer 2 loop on VLAN 100 (PA has no STP on L2 ports) - causing frame flooding,
+; duplicate 'inside-l2' sessions, MAC flapping, and intermittent loss of L3
+; reachability across the inside segment. Per the design these bypass ports are a
+; FAILOVER-ONLY path and must stay admin-down in normal operation; bring them up
+; manually only if the ASA serial link (eth1/3) fails. eth1/8 (server backup) too.
+sendln 'set network interface ethernet ethernet1/6 link-state down'
+wait '[edit]'
+sendln 'set network interface ethernet ethernet1/7 link-state down'
+wait '[edit]'
+sendln 'set network interface ethernet ethernet1/8 link-state down'
+wait '[edit]'
+
+; VLAN SVIs (Logical L3 Interfaces)
+sendln 'set network interface vlan units vlan.10 ip 172.16.0.92/29'
+wait '[edit]'
+sendln 'set network interface vlan units vlan.10 interface-management-profile PING-ONLY'
+wait '[edit]'
+
+sendln 'set network interface vlan units vlan.92 ip 172.16.0.81/29'
+wait '[edit]'
+sendln 'set network interface vlan units vlan.92 interface-management-profile PING-ONLY'
+wait '[edit]'
+
+sendln 'set network interface vlan units vlan.100 ip 172.16.0.100/29'
+wait '[edit]'
+sendln 'set network interface vlan units vlan.100 interface-management-profile PING-ONLY'
+wait '[edit]'
+
+sendln 'set network interface vlan units vlan.69 ip 172.16.0.78/29'
+wait '[edit]'
+sendln 'set network interface vlan units vlan.69 interface-management-profile PING-ONLY'
+wait '[edit]'
+
+; VLAN Membership & Virtual Interfaces
+sendln 'set network vlan OUTSIDE interface [ ethernet1/2 ethernet1/5 ]'
+wait '[edit]'
+sendln 'set network vlan OUTSIDE virtual-interface interface vlan.10'
+wait '[edit]'
+
+sendln 'set network vlan VL-DMZ interface [ ethernet1/4 ]'
+wait '[edit]'
+sendln 'set network vlan VL-DMZ virtual-interface interface vlan.92'
+wait '[edit]'
+
+sendln 'set network vlan VL-INSIDE-BYPASS interface [ ethernet1/6 ethernet1/7 ]'
+wait '[edit]'
+sendln 'set network vlan VL-INSIDE-BYPASS virtual-interface interface vlan.100'
+wait '[edit]'
+
+sendln 'set network vlan VL-SERVER interface [ ethernet1/8 ]'
+wait '[edit]'
+sendln 'set network vlan VL-SERVER virtual-interface interface vlan.69'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 5. SECURITY ZONES
+; ---------------------------------------------------------------------
+sendln 'set zone outside network layer3 vlan.10'
+wait '[edit]'
+sendln 'set zone outside-l2 network layer2 [ ethernet1/2 ethernet1/5 ]'
+wait '[edit]'
+
+sendln 'set zone inside network layer3 [ ethernet1/3 vlan.100 ]'
+wait '[edit]'
+sendln 'set zone inside-l2 network layer2 [ ethernet1/6 ethernet1/7 ]'
+wait '[edit]'
+
+sendln 'set zone dmz network layer3 vlan.92'
+wait '[edit]'
+sendln 'set zone dmz-l2 network layer2 ethernet1/4'
+wait '[edit]'
+
+sendln 'set zone server network layer3 vlan.69'
+wait '[edit]'
+sendln 'set zone server-l2 network layer2 ethernet1/8'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 6. VIRTUAL ROUTER & OSPF (PTSO Cost Engineering)
+; ---------------------------------------------------------------------
+sendln 'set network virtual-router default interface [ ethernet1/3 vlan.10 vlan.69 vlan.92 vlan.100 ]'
+wait '[edit]'
+sendln 'set network virtual-router default protocol ospf enable yes'
+wait '[edit]'
+sendln 'set network virtual-router default protocol ospf router-id 6.6.6.6'
+wait '[edit]'
+
+; OSPF Area 0 Interfaces
+; Primary Serial Link to ASA (Cost 10)
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/3 enable yes passive no metric 10'
+wait '[edit]'
+
+; Primary Server Gateway SVI (Cost 10)
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.92 enable yes passive no metric 10'
+wait '[edit]'
+
+; Outside Transit SVI to R1/R2 (Cost 10)
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.10 enable yes passive no metric 10'
+wait '[edit]'
+
+; Backup PTSO Inside Bypass Link to DSW1/DSW2 (Cost 500)
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.100 enable yes passive no metric 500'
+wait '[edit]'
+
+; Backup Internal Server SVI (Cost 500, Passive)
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.69 enable yes passive yes metric 500'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 7. ADDRESS OBJECTS & GROUPS (Fixed GeoIP Clashes: HR-NET & IT-NET)
+; ---------------------------------------------------------------------
+sendln 'set address STAFF ip-netmask 172.16.0.0/27'
+wait '[edit]'
+sendln 'set address ATM ip-netmask 172.16.0.48/29'
+wait '[edit]'
+sendln 'set address HR-NET ip-netmask 172.16.0.56/29'
+wait '[edit]'
+sendln 'set address IT-NET ip-netmask 172.16.0.64/29'
+wait '[edit]'
+sendln 'set address SERVERS ip-netmask 172.16.0.72/29'
+wait '[edit]'
+sendln 'set address DMZ-SUBNET ip-netmask 172.16.0.80/29'
+wait '[edit]'
+
+; Internal Server Hosts
+sendln 'set address FILE-SVR ip-netmask 172.16.0.74/32'
+wait '[edit]'
+sendln 'set address ACCT-SVR ip-netmask 172.16.0.75/32'
+wait '[edit]'
+sendln 'set address TXN-SVR ip-netmask 172.16.0.76/32'
+wait '[edit]'
+sendln 'set address DHCP-SVR ip-netmask 172.16.0.77/32'
+wait '[edit]'
+
+; DMZ Hosts
+sendln 'set address WEB-SVR ip-netmask 172.16.0.82/32'
+wait '[edit]'
+sendln 'set address DNS-SVR ip-netmask 172.16.0.83/32'
+wait '[edit]'
+sendln 'set address JUMP-SVR ip-netmask 172.16.0.84/32'
+wait '[edit]'
+sendln 'set address JUMP2-SVR ip-netmask 172.16.0.85/32'
+wait '[edit]'
+
+; Public NAT IPs
+sendln 'set address PUB-PAT ip-netmask 203.149.210.185/32'
+wait '[edit]'
+sendln 'set address PUB-WEB ip-netmask 203.149.210.186/32'
+wait '[edit]'
+sendln 'set address PUB-DNS ip-netmask 203.149.210.187/32'
+wait '[edit]'
+
+; Address Groups
+sendln 'set address-group STAFF-ATM static [ STAFF ATM ]'
+wait '[edit]'
+sendln 'set address-group HR-IT static [ HR-NET IT-NET ]'
+wait '[edit]'
+sendln 'set address-group INTERNET-USERS static [ HR-NET IT-NET ]'
+wait '[edit]'
+
+; DSW Inside-Transit SVIs (for DHCP relay source from distribution switches)
+sendln 'set address DSW1-SVI ip-netmask 172.16.0.98/32'
+wait '[edit]'
+sendln 'set address DSW2-SVI ip-netmask 172.16.0.99/32'
+wait '[edit]'
+sendln 'set address-group DSWs static [ DSW1-SVI DSW2-SVI ]'
+wait '[edit]'
+
+; Custom Service Objects & Schedules
+sendln 'set service TCP-2222 protocol tcp port 2222'
+wait '[edit]'
+sendln 'set service UDP-67 protocol udp port 67'
+wait '[edit]'
+sendln 'set schedule TXN-WINDOW recurring weekly monday 01:00-03:00 tuesday 01:00-03:00 wednesday 01:00-03:00 thursday 01:00-03:00 friday 01:00-03:00'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 8. NAT RULES (PTSO Standby NAT on PA-440)
+; ---------------------------------------------------------------------
+sendln 'set rulebase nat rules NAT-WEB from outside to outside source any destination PUB-WEB service service-http destination-translation translated-address WEB-SVR'
+wait '[edit]'
+sendln 'set rulebase nat rules NAT-DNS from outside to outside source any destination PUB-DNS service any destination-translation translated-address DNS-SVR'
+wait '[edit]'
+sendln 'set rulebase nat rules NAT-JUMP-SSH from outside to outside source any destination PUB-PAT service TCP-2222 destination-translation translated-address JUMP-SVR translated-port 22'
+wait '[edit]'
+sendln 'set rulebase nat rules NAT-OUTBOUND from [ inside server dmz ] to outside source [ HR-NET IT-NET TXN-SVR JUMP-SVR JUMP2-SVR ] destination any service any source-translation dynamic-ip-and-port translated-address PUB-PAT'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 9. SECURITY RULES
+; ---------------------------------------------------------------------
+; OSPF Adjacency (inter-zone OSPF must be explicitly allowed on PAN-OS)
+sendln 'set rulebase security rules ALLOW-OSPF from [ outside inside server ] to [ outside inside server ] source any destination any source-user any category any application ospf service any action allow log-end no'
+wait '[edit]'
+
+; Inbound DMZ Access
+sendln 'set rulebase security rules INBOUND-WEB from outside to dmz source any destination PUB-WEB source-user any category any application [ web-browsing ssl ] service application-default action allow log-end yes'
+wait '[edit]'
+sendln 'set rulebase security rules INBOUND-DNS from outside to dmz source any destination PUB-DNS source-user any category any application dns service application-default action allow log-end yes'
+wait '[edit]'
+sendln 'set rulebase security rules JUMP-SSH-IN from outside to dmz source any destination PUB-PAT source-user any category any application ssh service TCP-2222 action allow log-end yes'
+wait '[edit]'
+
+; Internal Inter-VLAN Transit
+sendln 'set rulebase security rules INTERNAL-TO-DNS from inside to dmz source INTERNET-USERS destination DNS-SVR source-user any category any application dns service application-default action allow log-end yes'
+wait '[edit]'
+sendln 'set rulebase security rules INTERNAL-TO-WEB from inside to dmz source INTERNET-USERS destination WEB-SVR source-user any category any application [ web-browsing ssl ] service application-default action allow log-end yes'
+wait '[edit]'
+sendln 'set rulebase security rules IT-TO-JUMP-SSH from inside to dmz source IT-NET destination [ JUMP-SVR JUMP2-SVR ] source-user any category any application ssh service application-default action allow log-end yes'
+wait '[edit]'
+sendln 'set rulebase security rules PTSO-HR-TO-FILE from inside to server source HR-NET destination FILE-SVR source-user any category any application [ ms-ds-smb ping ] service application-default action allow log-end yes'
+wait '[edit]'
+sendln 'set rulebase security rules PTSO-STAFF-ATM-SVR from inside to server source STAFF-ATM destination [ ACCT-SVR TXN-SVR ] source-user any category any application any service any action allow log-end yes'
+wait '[edit]'
+sendln 'set rulebase security rules PTSO-DHCP-RELAY from inside to server source DSWs destination DHCP-SVR source-user any category any application dhcp service UDP-67 action allow log-end yes'
+wait '[edit]'
+
+; Outbound Internet Access (tightened App-ID after end-to-end path confirmed working)
+sendln 'set rulebase security rules HR-IT-INTERNET from inside to outside source INTERNET-USERS destination any source-user any category any application [ web-browsing ssl dns ping ] service application-default action allow log-end yes'
+wait '[edit]'
+sendln 'set rulebase security rules TXN-INTERNET-TIMED from [ inside server ] to [ outside dmz ] source TXN-SVR destination any source-user any category any application [ web-browsing ssl dns ] service application-default schedule TXN-WINDOW action allow log-end yes'
+wait '[edit]'
+sendln 'set rulebase security rules DMZ-OUTBOUND-NTP from dmz to outside source [ JUMP-SVR JUMP2-SVR ] destination any source-user any category any application [ ntp dns ] service application-default action allow log-end yes'
+wait '[edit]'
+
+; Default Interzone Deny
+sendln 'set rulebase security rules DENY-ALL rule-type interzone from any to any source any destination any source-user any category any application any service any action deny log-end yes'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 10. MANAGEMENT PROFILES: TACACS+ & SYSLOG
+; ---------------------------------------------------------------------
+sendln 'set shared server-profile tacplus TACACS server JUMP address 172.16.0.44 secret bigBoy@ServerPassword1'
+wait '[edit]'
+sendln 'set shared server-profile tacplus TACACS server JUMP2 address 172.16.0.45 secret bigBoy@ServerPassword2'
+wait '[edit]'
+sendln 'set shared server-profile tacplus TACACS protocol PAP'
+wait '[edit]'
+sendln 'set shared server-profile tacplus TACACS timeout 3'
+wait '[edit]'
+sendln 'set shared server-profile tacplus TACACS retry 2'
+wait '[edit]'
+
+sendln 'set shared log-settings syslog SYSLOG-JUMP server JUMP server 172.16.0.44 transport UDP port 514 format BSD facility LOG_USER'
+wait '[edit]'
+sendln 'set shared log-settings syslog SYSLOG-JUMP server JUMP2 server 172.16.0.45 transport UDP port 514 format BSD facility LOG_USER'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 11. COMMIT CONFIGURATION
+; ---------------------------------------------------------------------
+sendln 'commit'
+wait 'Configuration committed successfully'
+sendln 'exit'
