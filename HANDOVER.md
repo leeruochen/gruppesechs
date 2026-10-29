@@ -148,7 +148,7 @@ On the PA, `ping host <ip>` without a source uses the **management interface** a
 
 ## 5. Config files and what each contains
 
-Location: `c:\Users\asus\Downloads\configs\`
+Location: `.ttl` macros are in `c:\Users\asus\Downloads\configs\config\`. `plan.md`, `supermicro setup.md`, `README.md` and this file are in `c:\Users\asus\Downloads\configs\`.
 
 | File | Device | Notes |
 |------|--------|-------|
@@ -214,6 +214,10 @@ Then verify HR internet (web + DNS + ping) still works. If a needed app is missi
 
 ## 8. OUTSTANDING / NOT YET DONE
 
+- **FINAL HARDENING REMINDER — remove the temporary ICMP permits** once ALL connectivity testing is complete. They are kept on purpose for testing now. Remove from BOTH DSW1 and DSW2 (live and in `dsw1.ttl` / `dsw2.ttl`, marked `TODO (FINAL HARDENING)`):
+  - `ACL_HR_IN`: `permit icmp 172.16.0.56 0.0.0.7 any`
+  - `ACL_IT_IN`: `permit icmp 172.16.0.64 0.0.0.7 any`
+  After removal, HR/IT can no longer ping internal/transit IPs (`172.16.0.0/25`, e.g. `.90`, `.97`, `.105`). That is the intended plan.md behaviour, so use ASA `packet-tracer` / PA `test security-policy-match` for any further internal tests.
 - **Apply PA `HR-IT-INTERNET` tighten live** (see Section 6) — currently loose on the box.
 - **Servers not built:** DHCP (Proxmox `.77`), DNS (VM101 `.83`, needs upstream forwarders for name resolution), File (VM103), Accounts (VM104), Transactions (VM105). TACACS1 (`.44`) and TACACS2 (`.45`) are UP.
 - **DNS recursion:** internal DNS must forward to upstream (8.8.8.8 / 1.1.1.1) for internet name resolution; IP-based internet access already works.

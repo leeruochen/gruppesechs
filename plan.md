@@ -18,7 +18,7 @@ HR VLAN
 IT VLAN
 
 - 1 network manager, 2 network engineers (3 ports reserved on SW4)  
-- internet access
+- internet access 
 
 No VLANs should be able to access each other
 

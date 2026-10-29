@@ -371,6 +371,10 @@ sendln 'permit tcp 172.16.0.56 0.0.0.7 host 172.16.0.82 eq www'
 wait '#'
 sendln 'permit tcp 172.16.0.56 0.0.0.7 host 172.16.0.82 eq 443'
 wait '#'
+; TODO (FINAL HARDENING): TEMPORARY testing permit. Remove this line once all
+; connectivity testing is complete. plan.md does not allow HR ICMP to arbitrary
+; destinations; without this line the anti-smurf deny below blocks HR pings to
+; internal/transit IPs (172.16.0.0/25), which is the intended final behaviour.
 sendln 'permit icmp 172.16.0.56 0.0.0.7 any'
 wait '#'
 sendln 'deny ip 172.16.0.56 0.0.0.7 172.16.0.0 0.0.0.127 log'
@@ -398,6 +402,8 @@ sendln 'permit tcp 172.16.0.64 0.0.0.7 host 172.16.0.84 eq 22'
 wait '#'
 sendln 'permit tcp 172.16.0.64 0.0.0.7 host 172.16.0.85 eq 22'
 wait '#'
+; TODO (FINAL HARDENING): TEMPORARY testing permit. Remove once all testing is
+; complete (same reason as the HR ICMP line in ACL_HR_IN).
 sendln 'permit icmp 172.16.0.64 0.0.0.7 any'
 wait '#'
 sendln 'deny ip 172.16.0.64 0.0.0.7 172.16.0.0 0.0.0.127 log'
