@@ -139,7 +139,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 6. ATM End-User Access Ports (G1/0/5 - 7, Max 1 MAC)
+; 6. ATM End-User Access Ports (G1/0/5 - 7)
 sendln 'interface range GigabitEthernet1/0/5 - 7'
 wait '#'
 sendln 'description ATM_Terminals_VLAN46'
@@ -152,7 +152,7 @@ sendln 'switchport nonegotiate'
 wait '#'
 sendln 'switchport port-security'
 wait '#'
-sendln 'switchport port-security maximum 1'
+sendln 'switchport port-security maximum 5'
 wait '#'
 sendln 'switchport port-security mac-address sticky'
 wait '#'
