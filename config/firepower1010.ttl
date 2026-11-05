@@ -242,7 +242,18 @@ sendln 'security-level 50'
 wait '#'
 sendln 'ip address 172.16.0.86 255.255.255.248'
 wait '#'
-sendln 'no shutdown'
+; KEPT SHUT DOWN in normal operation (P1 fix, verified 4 Nov: HR DNS to .83
+; started working once this was shut).
+; While up, the ASA has a directly connected route to 172.16.0.80/29, and a
+; connected route always beats OSPF. So the ASA delivered HR/IT traffic for the
+; DMZ straight out this interface, skipping the PA. The DMZ servers reply via
+; their gateway, the PA (.81), which had never seen the request and dropped the
+; reply. Firewalls need both directions on the same path.
+; Shut, the ASA learns 172.16.0.80/29 from the PA via OSPF (via .105) and DMZ
+; traffic goes ASA -> PA -> DMZ as the serial design intends.
+; MANUAL FAILOVER ONLY: if the PA fails, 'no shutdown' this interface AND point
+; the DMZ servers' default route at 172.16.0.86.
+sendln 'shutdown'
 wait '#'
 sendln 'exit'
 wait '#'
@@ -275,6 +286,11 @@ sendln 'exit'
 wait '#'
 
 ; Static Route for Management OOB
+; STATIC ROUTE: REQUIRED (OSPF does NOT provide it).
+; Management1/1 is management-only and not part of OSPF, so management-plane
+; traffic needs its own default. The data-plane default via the PA (.105) is
+; learned from OSPF (R1's default-information originate), so no static is
+; needed for user traffic on the ASA.
 sendln 'route management 0.0.0.0 0.0.0.0 172.16.0.33 1'
 wait '#'
 
@@ -448,6 +464,33 @@ wait '#'
 sendln 'exit'
 wait '#'
 
+; Every DSW address that can source a DHCP relay (P2 fix): each VLAN SVI on
+; both DSWs plus the Vlan100 transit addresses.
+sendln 'object-group network DSW-SVIS'
+wait '#'
+sendln 'network-object host 172.16.0.2'
+wait '#'
+sendln 'network-object host 172.16.0.3'
+wait '#'
+sendln 'network-object host 172.16.0.50'
+wait '#'
+sendln 'network-object host 172.16.0.51'
+wait '#'
+sendln 'network-object host 172.16.0.58'
+wait '#'
+sendln 'network-object host 172.16.0.59'
+wait '#'
+sendln 'network-object host 172.16.0.66'
+wait '#'
+sendln 'network-object host 172.16.0.67'
+wait '#'
+sendln 'network-object host 172.16.0.98'
+wait '#'
+sendln 'network-object host 172.16.0.99'
+wait '#'
+sendln 'exit'
+wait '#'
+
 sendln 'object-group network JUMP-SVRs'
 wait '#'
 sendln 'network-object object JUMP-SVR'
@@ -522,7 +565,11 @@ wait '#'
 ; 11. Access Control Lists (ACLs)
 sendln 'access-list INSIDE_IN extended permit ospf any any'
 wait '#'
-sendln 'access-list INSIDE_IN extended permit udp object-group DSWs object DHCP-SVR eq bootps'
+; DHCP relay (P2 fix, verified 4 Nov): the DSWs relay with the client VLAN's SVI
+; as the source/giaddr, not only .98/.99, so the old 'DSWs'-only line dropped
+; every relayed request. DSW-SVIS covers all of them. (Live also still has the
+; original 'DSWs' line; it's redundant but harmless.)
+sendln 'access-list INSIDE_IN extended permit udp object-group DSW-SVIS object DHCP-SVR eq bootps'
 wait '#'
 sendln 'access-list INSIDE_IN extended permit tcp object HR object FILE-SVR eq 445'
 wait '#'
@@ -553,6 +600,12 @@ wait '#'
 sendln 'access-list INSIDE_IN extended deny ip any any log'
 wait '#'
 
+; DHCP relay return (P2 fix, verified 4 Nov): lets the server's OFFER/ACK back
+; to the relaying DSW SVI. Needed when the reply goes to a different DSW address
+; (giaddr) than the one the request came from, so the ASA has no matching
+; connection. Must stay ABOVE the SERVERS -> INTERNAL deny below.
+sendln 'access-list SERVER_IN extended permit udp object DHCP-SVR eq bootps object-group DSW-SVIS eq bootps'
+wait '#'
 sendln 'access-list SERVER_IN extended deny ip object SERVERS object INTERNAL log'
 wait '#'
 sendln 'access-list SERVER_IN extended permit tcp object TXN-SVR any eq www time-range TXN-WINDOW'

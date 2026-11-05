@@ -208,6 +208,14 @@ sendln 'interface GigabitEthernet0/1/1'
 wait '#'
 sendln 'description Direct_InterRouter_Link_to_R1'
 wait '#'
+; The lab image pre-assigns G0/1/1 to the factory 'Mgmt-vrf' (and a DHCP
+; client-id). That keeps the interface out of global OSPF and the global
+; routing table, so R1-R2 never peer on this link. Remove it BEFORE setting
+; the IP: this command deletes any IP address on the interface.
+sendln 'no vrf forwarding Mgmt-vrf'
+wait '#'
+sendln 'no ip dhcp client client-id'
+wait '#'
 sendln 'ip address 172.16.0.110 255.255.255.252'
 wait '#'
 sendln 'ip ospf cost 5'
@@ -240,8 +248,15 @@ wait '#'
 sendln 'exit'
 wait '#'
 
+; STATIC ROUTE: REQUIRED for the backup path (OSPF does NOT provide it).
+; The public NAT block 203.149.210.184/29 is never advertised into OSPF (the
+; PA owns it only as NAT addresses), so R2 must be told where it lives. R2 only
+; uses this when R1 hands public-block traffic to R2 (R1's AD 250 backup).
 sendln 'ip route 203.149.210.184 255.255.255.248 172.16.0.92 track 2'
 wait '#'
+; STATIC ROUTE: OPTIONAL (redundancy only, not related to OSPF).
+; Floating route (AD 250) to the ASA wan-backup interface, used only if the PA
+; (.92) fails. Safe to omit if you are not testing PA failover.
 sendln 'ip route 203.149.210.184 255.255.255.248 172.16.0.114 250'
 wait '#'
 

@@ -47,6 +47,9 @@ sendln 'set deviceconfig system login-banner "WARNING: UNAUTHORIZED ACCESS TO GR
 wait '[edit]'
 
 ; Out-Of-Band Management Configuration
+; default-gateway 172.16.0.33: REQUIRED (OSPF does NOT provide it).
+; The PA management port is a separate plane from the data-plane virtual router
+; that runs OSPF, so it needs its own gateway.
 sendln 'set deviceconfig system type static ip-address 172.16.0.41 netmask 255.255.255.240 default-gateway 172.16.0.33'
 wait '[edit]'
 sendln 'set deviceconfig system service disable-telnet yes disable-http yes disable-ssh no disable-https no'
@@ -208,7 +211,16 @@ wait '[edit]'
 ; ---------------------------------------------------------------------
 ; 6. VIRTUAL ROUTER & OSPF (PTSO Cost Engineering)
 ; ---------------------------------------------------------------------
-sendln 'set network virtual-router default interface [ ethernet1/3 vlan.10 vlan.69 vlan.92 vlan.100 ]'
+; vlan.69 is deliberately NOT in the virtual router (P9 fix, applied live and
+; verified). Its only port, eth1/8, is admin-down, but while vlan.69 was in the
+; VR the PA still treated 172.16.0.72/29 as directly connected and sent replies
+; to internal servers into the dead interface. Without it, the PA learns
+; 172.16.0.72/29 from the ASA via OSPF (O2 via 172.16.0.106) and replies go back
+; through the ASA. If you ever re-enable the eth1/8 bypass, add vlan.69 back
+; here AND restore the commented OSPF vlan.69 line further down.
+; (Commit shows the warning 'Interface vlan.69 has no virtual-router
+; configured'. That is expected.)
+sendln 'set network virtual-router default interface [ ethernet1/3 vlan.10 vlan.92 vlan.100 ]'
 wait '[edit]'
 sendln 'set network virtual-router default protocol ospf enable yes'
 wait '[edit]'
@@ -232,8 +244,17 @@ wait '[edit]'
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.100 enable yes passive no metric 500'
 wait '[edit]'
 
-; Backup Internal Server SVI (Cost 500, Passive)
-sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.69 enable yes passive yes metric 500'
+; Backup Internal Server SVI: DISABLED while eth1/8 is down (P9 fix, see the
+; virtual-router note above). Restore together with vlan.69 in the VR:
+; sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.69 enable yes passive yes metric 500'
+; wait '[edit]'
+
+; STATIC ROUTE: OPTIONAL (OSPF already provides it).
+; R1's 'default-information originate' already gives the PA an OSPF default
+; via R1 (.90). This static matches the live PA (route name DEFAULT-OUT) so a
+; rebuild reproduces it exactly. Static wins over the OSPF default while both
+; exist. Safe to remove: the PA then uses the OSPF default instead.
+sendln 'set network virtual-router default routing-table ip static-route DEFAULT-OUT destination 0.0.0.0/0 interface vlan.10 nexthop ip-address 172.16.0.90'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
@@ -275,9 +296,24 @@ wait '[edit]'
 ; Public NAT IPs
 sendln 'set address PUB-PAT ip-netmask 203.149.210.185/32'
 wait '[edit]'
-sendln 'set address PUB-WEB ip-netmask 203.149.210.186/32'
+; Public IPs for the DMZ services. Changed 4 Nov from .186/.187 to .189/.190 so
+; they match plan.md and the ASA's standby NAT (one public IP per service, even
+; after a failover). The NAT and security rules reference these objects, so
+; changing the value here moves everything.
+sendln 'set address PUB-WEB ip-netmask 203.149.210.189/32'
 wait '[edit]'
-sendln 'set address PUB-DNS ip-netmask 203.149.210.187/32'
+sendln 'set address PUB-DNS ip-netmask 203.149.210.190/32'
+wait '[edit]'
+
+; Upstream resolvers for the DMZ DNS server's forwarders (P5 fix, 4 Nov)
+sendln 'set address DNS-FORWARDERS-1 ip-netmask 8.8.8.8/32'
+wait '[edit]'
+sendln 'set address DNS-FORWARDERS-2 ip-netmask 1.1.1.1/32'
+wait '[edit]'
+; ICT caching DNS server provided by the lab (added 4 Nov). VM101 forwards to it
+; first, because other racks' names (e.g. wkg00n.sitict.net) only exist on the
+; lab DNS, not on the public internet.
+sendln 'set address ICT-DNS ip-netmask 172.18.4.32/32'
 wait '[edit]'
 
 ; Address Groups
@@ -309,11 +345,15 @@ wait '[edit]'
 ; ---------------------------------------------------------------------
 sendln 'set rulebase nat rules NAT-WEB from outside to outside source any destination PUB-WEB service service-http destination-translation translated-address WEB-SVR'
 wait '[edit]'
+; HTTPS to the web server from outside (P4 fix, added 4 Nov). NAT-WEB only
+; matches service-http (80/8080); INBOUND-WEB already allows App-ID ssl.
+sendln 'set rulebase nat rules NAT-WEB-HTTPS from outside to outside source any destination PUB-WEB service service-https destination-translation translated-address WEB-SVR'
+wait '[edit]'
 sendln 'set rulebase nat rules NAT-DNS from outside to outside source any destination PUB-DNS service any destination-translation translated-address DNS-SVR'
 wait '[edit]'
 sendln 'set rulebase nat rules NAT-JUMP-SSH from outside to outside source any destination PUB-PAT service TCP-2222 destination-translation translated-address JUMP-SVR translated-port 22'
 wait '[edit]'
-sendln 'set rulebase nat rules NAT-OUTBOUND from [ inside server dmz ] to outside source [ HR-NET IT-NET TXN-SVR JUMP-SVR JUMP2-SVR ] destination any service any source-translation dynamic-ip-and-port translated-address PUB-PAT'
+sendln 'set rulebase nat rules NAT-OUTBOUND from [ inside server dmz ] to outside source [ HR-NET IT-NET TXN-SVR JUMP-SVR JUMP2-SVR DNS-SVR ] destination any service any source-translation dynamic-ip-and-port translated-address PUB-PAT'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
@@ -351,6 +391,12 @@ wait '[edit]'
 sendln 'set rulebase security rules TXN-INTERNET-TIMED from [ inside server ] to [ outside dmz ] source TXN-SVR destination any source-user any category any application [ web-browsing ssl dns ] service application-default schedule TXN-WINDOW action allow log-end yes'
 wait '[edit]'
 sendln 'set rulebase security rules DMZ-OUTBOUND-NTP from dmz to outside source [ JUMP-SVR JUMP2-SVR ] destination any source-user any category any application [ ntp dns ] service application-default action allow log-end yes'
+wait '[edit]'
+
+; DMZ DNS server recursion to upstream forwarders (P5 fix, applied live 4 Nov).
+; NAT: DNS-SVR is also in NAT-OUTBOUND's source list, so these queries leave
+; as 203.149.210.185. NAT-DNS is destination-only (inbound) and doesn't cover them.
+sendln 'set rulebase security rules DNS-SVR-FORWARD from dmz to outside source DNS-SVR destination [ ICT-DNS DNS-FORWARDERS-1 DNS-FORWARDERS-2 ] source-user any category any application dns service application-default action allow log-end yes'
 wait '[edit]'
 
 ; Default Interzone Deny

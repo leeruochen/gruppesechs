@@ -325,6 +325,20 @@ wait '#'
 ; 11. Inter-VLAN Security ACLs & VTY Management ACL
 sendln 'ip access-list extended ACL_STAFF_IN'
 wait '#'
+; HSRP v2 hellos from the peer DSW (P10 fix, confirmed 4 Nov). This ACL is
+; applied inbound on the SVI, so it also filters the other DSW's hellos
+; (src .2/.3 -> 224.0.0.102 udp 1985). Without this line the final deny drops
+; them and BOTH DSWs go Active for the VLAN (duplicate gateway).
+; HR/IT ACLs don't need it: their final 'permit ip <subnet> any' covers it.
+sendln 'permit udp 172.16.0.0 0.0.0.31 host 224.0.0.102 eq 1985'
+wait '#'
+; DHCP relay replies for the PEER DSW (found 4 Nov). Both DSWs relay
+; client requests (helper on both SVIs). The ASA sends all replies for this
+; subnet to ONE DSW, which forwards replies meant for the other DSW's SVI across
+; the user VLAN, so they enter that SVI INBOUND and hit this ACL. Seen as
+; 'ACL_ATM_IN denied udp 172.16.0.77(67) -> 172.16.0.51(67)'.
+sendln 'permit udp host 172.16.0.77 eq bootps any eq bootps'
+wait '#'
 sendln 'permit udp any host 255.255.255.255 eq bootps'
 wait '#'
 sendln 'permit udp 172.16.0.0 0.0.0.31 host 172.16.0.77 eq bootps'
@@ -340,6 +354,12 @@ wait '#'
 
 sendln 'ip access-list extended ACL_ATM_IN'
 wait '#'
+; HSRP v2 hellos from the peer DSW (P10 fix, confirmed 4 Nov). See ACL_STAFF_IN.
+sendln 'permit udp 172.16.0.48 0.0.0.7 host 224.0.0.102 eq 1985'
+wait '#'
+; DHCP relay replies for the peer DSW. See ACL_STAFF_IN.
+sendln 'permit udp host 172.16.0.77 eq bootps any eq bootps'
+wait '#'
 sendln 'permit udp any host 255.255.255.255 eq bootps'
 wait '#'
 sendln 'permit udp 172.16.0.48 0.0.0.7 host 172.16.0.77 eq bootps'
@@ -354,6 +374,10 @@ sendln 'exit'
 wait '#'
 
 sendln 'ip access-list extended ACL_HR_IN'
+wait '#'
+; DHCP relay replies for the peer DSW. See ACL_STAFF_IN. (HR's final
+; 'permit ip 172.16.0.56/29 any' does NOT cover source .77.)
+sendln 'permit udp host 172.16.0.77 eq bootps any eq bootps'
 wait '#'
 sendln 'permit udp any host 255.255.255.255 eq bootps'
 wait '#'
@@ -385,6 +409,9 @@ sendln 'exit'
 wait '#'
 
 sendln 'ip access-list extended ACL_IT_IN'
+wait '#'
+; DHCP relay replies for the peer DSW. See ACL_STAFF_IN.
+sendln 'permit udp host 172.16.0.77 eq bootps any eq bootps'
 wait '#'
 sendln 'permit udp any host 255.255.255.255 eq bootps'
 wait '#'
@@ -667,6 +694,9 @@ wait '#'
 sendln 'exit'
 wait '#'
 
+; STATIC ROUTE: REQUIRED (OSPF does NOT provide it).
+; OSPF runs only in the global table. VRF OOB has no routing protocol, so this
+; is the only way management traffic leaves the 172.16.0.32/28 subnet via R1.
 sendln 'ip route vrf OOB 0.0.0.0 0.0.0.0 172.16.0.33'
 wait '#'
 
@@ -688,6 +718,12 @@ sendln 'ip sla schedule 10 life forever start-time now'
 wait '#'
 sendln 'track 10 ip sla 10 reachability'
 wait '#'
+; STATIC ROUTE: OPTIONAL (OSPF already provides a working default).
+; With the PA bypass ports eth1/6/7 down, the only OSPF path to R1's default is
+; via the ASA (.97), so OSPF alone routes correctly today. Keep this anyway: it
+; guarantees the serial ASA path even if the bypass is ever brought back up
+; (OSPF then prefers the bypass and skips the ASA). The ip sla 10 / track 10
+; lines above exist only to support this route; remove them together.
 sendln 'ip route 0.0.0.0 0.0.0.0 172.16.0.97 track 10'
 wait '#'
 

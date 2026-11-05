@@ -223,6 +223,12 @@ sendln 'interface GigabitEthernet0/1/1'
 wait '#'
 sendln 'description Direct_InterRouter_Link_to_R2'
 wait '#'
+; The lab image pre-assigns G0/1/1 to the factory 'Mgmt-vrf'. That keeps the
+; interface out of global OSPF and the global routing table, so R1-R2 never
+; peer on this link. Remove it BEFORE setting the IP: this command deletes
+; any IP address on the interface. Harmless if the VRF is not assigned.
+sendln 'no vrf forwarding Mgmt-vrf'
+wait '#'
 sendln 'ip address 172.16.0.109 255.255.255.252'
 wait '#'
 sendln 'ip ospf cost 5'
@@ -272,10 +278,20 @@ sendln 'exit'
 wait '#'
 
 ; 7. Static Routes (Tracked WAN Default Route & Floating Public NAT Route)
+; STATIC ROUTE: REQUIRED (OSPF does NOT provide it).
+; The ISP does not run OSPF, so this is the only source of R1's default route.
+; It is also what 'default-information originate' below advertises into OSPF
+; for every other device. Must point at the ISP .94, NEVER .93 (R1 itself).
 sendln 'ip route 0.0.0.0 0.0.0.0 172.17.9.94 track 1'
 wait '#'
+; STATIC ROUTE: REQUIRED (OSPF does NOT provide it).
+; The public NAT block 203.149.210.184/29 is never advertised into OSPF (the PA
+; holds it only as NAT addresses), so inbound/return traffic for it needs this.
 sendln 'ip route 203.149.210.184 255.255.255.248 172.16.0.92 track 2'
 wait '#'
+; STATIC ROUTE: OPTIONAL (redundancy only, not related to OSPF).
+; Floating route (AD 250) via R2, used only if the PA (.92) stops answering
+; IP SLA 2. Safe to omit if you are not testing PA failover.
 sendln 'ip route 203.149.210.184 255.255.255.248 172.16.0.110 250'
 wait '#'
 

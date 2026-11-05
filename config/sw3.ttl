@@ -80,24 +80,24 @@ wait '#'
 sendln 'ip arp inspection vlan 61'
 wait '#'
 
-; 4b. Static HR Host Bindings (STATIC IP - no DHCP snooping lease exists)
-; The HR workstation uses a static IP, so DAI has no snooping binding to validate
-; its ARP and drops it (SW_DAI-4-DHCP_SNOOPING_DENY), and IP Source Guard
-; (ip verify source) would drop its data plane too. These two static entries fix
-; both: the ARP ACL permits the host's MAC<->IP for DAI, and the ip source binding
-; adds a static entry so IP Source Guard permits its traffic.
-; NOTE: update the MAC (74d4.dd81.5ca2) / IP / interface if the HR host changes,
-; and add a second pair here for the 2nd HR host (manager + admin staff = 2 ports).
-sendln 'arp access-list STATIC-HR'
-wait '#'
-sendln 'permit ip host 172.16.0.60 mac host 74d4.dd81.5ca2'
-wait '#'
-sendln 'exit'
-wait '#'
-sendln 'ip arp inspection filter STATIC-HR vlan 61'
-wait '#'
-sendln 'ip source binding 74d4.dd81.5ca2 vlan 61 172.16.0.60 interface GigabitEthernet1/0/5'
-wait '#'
+; 4b. OPTIONAL: Static HR Host Bindings (ONLY for a host with a STATIC IP)
+; DISABLED since 4 Nov: HR hosts now get addresses from DHCP (VM107), and DHCP
+; snooping creates the DAI / IP Source Guard bindings automatically.
+; Do NOT enable these for a host that uses DHCP: a static binding for the same
+; MAC blocks its lease binding, so DAI and IP Source Guard drop its traffic
+; (seen 4 Nov as P12: laptop got .61 but had no connectivity).
+; Uncomment only for a host configured with a static IP. Update the MAC / IP /
+; interface to match it.
+; sendln 'arp access-list STATIC-HR'
+; wait '#'
+; sendln 'permit ip host 172.16.0.60 mac host 74d4.dd81.5ca2'
+; wait '#'
+; sendln 'exit'
+; wait '#'
+; sendln 'ip arp inspection filter STATIC-HR vlan 61'
+; wait '#'
+; sendln 'ip source binding 74d4.dd81.5ca2 vlan 61 172.16.0.60 interface GigabitEthernet1/0/5'
+; wait '#'
 
 ; 5. LACP Uplinks (Po1 to DSW1, Po2 to DSW2)
 ; Towards DSW1
@@ -218,6 +218,9 @@ wait '#'
 sendln 'exit'
 wait '#'
 
+; DEFAULT GATEWAY: REQUIRED (not related to OSPF).
+; Layer 2 access switches run no routing protocol. This lets the management
+; SVI (VLAN 99) reach anything outside 172.16.0.32/28 via R1.
 sendln 'ip default-gateway 172.16.0.33'
 wait '#'
 
