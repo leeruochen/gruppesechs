@@ -49,7 +49,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 3. VTY Management ACL
+; 3. Perimeter WAN-IN ACL, NAT ACL & VTY Management ACL
 sendln 'ip access-list standard MGMT-ONLY'
 wait '#'
 sendln 'permit host 172.16.0.44'
@@ -57,6 +57,44 @@ wait '#'
 sendln 'permit host 172.16.0.45'
 wait '#'
 sendln 'deny any log'
+wait '#'
+sendln 'exit'
+wait '#'
+
+; ISP2 (added 5 Nov): WAN 172.17.10.92/30 (R2 .93, ISP2 .94), public block
+; 129.126.142.184/29. Same pattern as R1's WAN-IN. Checked BEFORE NAT, so the
+; public-block permits match the public (pre-translation) addresses.
+sendln 'ip access-list extended WAN-IN'
+wait '#'
+sendln 'deny tcp any host 172.17.10.93 eq 22 log'
+wait '#'
+sendln 'deny tcp any host 172.17.10.93 eq 23 log'
+wait '#'
+sendln 'permit icmp host 172.17.10.94 host 172.17.10.93 echo-reply'
+wait '#'
+sendln 'permit ip any 129.126.142.184 0.0.0.7'
+wait '#'
+sendln 'permit tcp any host 172.17.10.93 established'
+wait '#'
+sendln 'deny ip any any log'
+wait '#'
+sendln 'exit'
+wait '#'
+
+; NAT-SOURCES: identical to R1's. The only inside addresses R2 will PAT.
+sendln 'ip access-list extended NAT-SOURCES'
+wait '#'
+sendln 'permit ip 172.16.0.56 0.0.0.7 any'
+wait '#'
+sendln 'permit ip 172.16.0.64 0.0.0.7 any'
+wait '#'
+sendln 'permit ip host 172.16.0.76 any'
+wait '#'
+sendln 'permit ip host 172.16.0.83 any'
+wait '#'
+sendln 'permit ip host 172.16.0.84 any'
+wait '#'
+sendln 'permit ip host 172.16.0.85 any'
 wait '#'
 sendln 'exit'
 wait '#'
@@ -145,14 +183,17 @@ sendln 'exit'
 wait '#'
 
 ; 5. Physical Routed Interfaces
-; PTSO Bypass Link to Firepower 1010 ASA (Ethernet1/2 - Cost 500)
+; WAN Link to ISP2 (5 Nov: G0/0/0 was the ASA bypass, now ISP2; the ASA link
+; moved to G0/1/1)
 sendln 'interface GigabitEthernet0/0/0'
 wait '#'
-sendln 'description PTSO_Bypass_Link_to_ASA_E1_2'
+sendln 'description WAN_Link_to_ISP2'
 wait '#'
-sendln 'ip address 172.16.0.113 255.255.255.252'
+sendln 'ip address 172.17.10.93 255.255.255.252'
 wait '#'
-sendln 'ip ospf cost 500'
+sendln 'ip access-group WAN-IN in'
+wait '#'
+sendln 'ip nat outside'
 wait '#'
 sendln 'ip flow monitor bank-flow-monitor input'
 wait '#'
@@ -171,6 +212,8 @@ wait '#'
 sendln 'description Secondary_Transit_to_PA440_eth1_2'
 wait '#'
 sendln 'ip address 172.16.0.91 255.255.255.248'
+wait '#'
+sendln 'ip nat inside'
 wait '#'
 sendln 'ip ospf cost 20'
 wait '#'
@@ -203,22 +246,27 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Direct Inter-Router Link to R1 (G0/1/1)
+; PA Bypass Link to ASA E1/2 (G0/1/1, cost 500)
+; 5 Nov: the R1-R2 link is gone. G0/1/1 now carries R2's ASA link, which used
+; to be on G0/0/0 (same subnet 172.16.0.112/30, R2 .113, ASA .114). Only used
+; when the PA is down; R2 then NATs the ASA's traffic itself.
 sendln 'interface GigabitEthernet0/1/1'
 wait '#'
-sendln 'description Direct_InterRouter_Link_to_R1'
+sendln 'description PA_Bypass_Link_to_ASA_E1_2'
 wait '#'
 ; The lab image pre-assigns G0/1/1 to the factory 'Mgmt-vrf' (and a DHCP
 ; client-id). That keeps the interface out of global OSPF and the global
-; routing table, so R1-R2 never peer on this link. Remove it BEFORE setting
-; the IP: this command deletes any IP address on the interface.
+; routing table. Remove it BEFORE setting the IP: this command deletes any IP
+; address on the interface.
 sendln 'no vrf forwarding Mgmt-vrf'
 wait '#'
 sendln 'no ip dhcp client client-id'
 wait '#'
-sendln 'ip address 172.16.0.110 255.255.255.252'
+sendln 'ip address 172.16.0.113 255.255.255.252'
 wait '#'
-sendln 'ip ospf cost 5'
+sendln 'ip nat inside'
+wait '#'
+sendln 'ip ospf cost 500'
 wait '#'
 sendln 'ip flow monitor bank-flow-monitor input'
 wait '#'
@@ -231,33 +279,53 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 6. IP SLA 2 (Track PA-440 .92) & Floating Static Route for Public NAT Block
-sendln 'ip sla 2'
+; 6. IP SLA 1 (Track ISP2) & Static Routes
+; (IP SLA 2 / track 2 to the PA and the public-block routes via the PA/ASA
+; were REMOVED 5 Nov: the public addresses now end at the routers' NAT.)
+sendln 'ip sla 1'
 wait '#'
-sendln 'icmp-echo 172.16.0.92'
+sendln 'icmp-echo 172.17.10.94 source-interface GigabitEthernet0/0/0'
 wait '#'
 sendln 'frequency 5'
 wait '#'
 sendln 'exit'
 wait '#'
 
-sendln 'ip sla schedule 2 life forever start-time now'
+sendln 'ip sla schedule 1 life forever start-time now'
 wait '#'
-sendln 'track 2 ip sla 2 reachability'
+sendln 'track 1 ip sla 1 reachability'
 wait '#'
 sendln 'exit'
 wait '#'
 
-; STATIC ROUTE: REQUIRED for the backup path (OSPF does NOT provide it).
-; The public NAT block 203.149.210.184/29 is never advertised into OSPF (the
-; PA owns it only as NAT addresses), so R2 must be told where it lives. R2 only
-; uses this when R1 hands public-block traffic to R2 (R1's AD 250 backup).
-sendln 'ip route 203.149.210.184 255.255.255.248 172.16.0.92 track 2'
+; STATIC ROUTE: REQUIRED (OSPF does NOT provide it).
+; The ISP doesn't run OSPF, so this is R2's only default and the source of the
+; backup default it advertises. Withdrawn when ISP2 stops answering (track 1).
+sendln 'ip route 0.0.0.0 0.0.0.0 172.17.10.94 track 1'
 wait '#'
-; STATIC ROUTE: OPTIONAL (redundancy only, not related to OSPF).
-; Floating route (AD 250) to the ASA wan-backup interface, used only if the PA
-; (.92) fails. Safe to omit if you are not testing PA failover.
-sendln 'ip route 203.149.210.184 255.255.255.248 172.16.0.114 250'
+; STATIC ROUTE: OPTIONAL (best practice). Drops packets for unused ISP2 public
+; addresses instead of looping them back to the ISP. Translated traffic never
+; uses it (NAT happens before routing).
+sendln 'ip route 129.126.142.184 255.255.255.248 Null0'
+wait '#'
+
+; 6b. NAT for ISP2 (same mappings as R1, on the ISP2 block)
+;   .185 PAT + jump SSH 2222 -> .84:22,  .189 web -> .82,  .190 DNS -> .83
+; Only used when traffic leaves via R2 (R1/ISP1 down). Outsiders reach the
+; servers by these IPs only: the lab DNS name points at ISP1's .189.
+sendln 'ip nat pool PUB-PAT 129.126.142.185 129.126.142.185 prefix-length 29'
+wait '#'
+sendln 'ip nat inside source list NAT-SOURCES pool PUB-PAT overload'
+wait '#'
+sendln 'ip nat inside source static tcp 172.16.0.82 80 129.126.142.189 80 extendable'
+wait '#'
+sendln 'ip nat inside source static tcp 172.16.0.82 443 129.126.142.189 443 extendable'
+wait '#'
+sendln 'ip nat inside source static udp 172.16.0.83 53 129.126.142.190 53 extendable'
+wait '#'
+sendln 'ip nat inside source static tcp 172.16.0.83 53 129.126.142.190 53 extendable'
+wait '#'
+sendln 'ip nat inside source static tcp 172.16.0.84 22 129.126.142.185 2222 extendable'
 wait '#'
 
 ; 7. OSPF Routing (Area 0)
@@ -269,17 +337,17 @@ sendln 'auto-cost reference-bandwidth 10000'
 wait '#'
 sendln 'passive-interface default'
 wait '#'
-sendln 'no passive-interface GigabitEthernet0/0/0'
-wait '#'
 sendln 'no passive-interface GigabitEthernet0/0/1'
 wait '#'
 sendln 'no passive-interface GigabitEthernet0/1/1'
 wait '#'
 sendln 'network 172.16.0.88 0.0.0.7 area 0'
 wait '#'
-sendln 'network 172.16.0.108 0.0.0.3 area 0'
-wait '#'
 sendln 'network 172.16.0.112 0.0.0.3 area 0'
+wait '#'
+; Backup ISP: metric 50 vs R1's 10, so everything prefers ISP1 while R1 has a
+; default. Advertised only while track 1 (ISP2 reachable) is up.
+sendln 'default-information originate metric 50 metric-type 1'
 wait '#'
 sendln 'log-adjacency-changes'
 wait '#'

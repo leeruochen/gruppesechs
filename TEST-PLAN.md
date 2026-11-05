@@ -79,9 +79,9 @@ If a service isn't running yet, a placeholder listener makes TCP tests meaningfu
   - `drop (no-v4-adjacency)` = the ACL passed but the destination isn't answering ARP (VM down or unplugged).
   - UDP/53 traces always end in `inspect-dns-invalid-pak`: packet-tracer sends no DNS payload. Look at the egress interface instead.
   - Captures: `capture <name> interface <if> match <proto> <src> <dst>`, `show capture <name>`, `no capture <name>`.
-- **PA:** `test security-policy-match from <zone> to <zone> source <ip> destination <ip> protocol <6|17|1> destination-port <port> application <app>`. Use the base App-ID name (e.g. `dns-base`, not `dns`). Also `test nat-policy-match ...`.
+- **PA:** `test security-policy-match from <zone> to <zone> source <ip> destination <ip> protocol <6|17|1> destination-port <port> application <app>`. Use the base App-ID name (e.g. `dns-base`, not `dns`). (Since 5 Nov the PA does no NAT; check NAT on R1/R2 with `show ip nat translations`.)
   - Sessions: `show session all filter source <ip>` / `destination <ip>`, then `show session id <id>` (check `s2c` bytes > 0).
-  - **Inbound** sessions are listed under the **public** destination IP, not the internal one.
+  - **Inbound** sessions: before 5 Nov listed under the public destination IP; with NAT on the routers, under the real server IP (`.82`, `.83`, `.84`).
   - Ping from the data plane: `ping source <dataplane-ip> host <ip>`. Plain `ping host` uses the management port.
 - **DSW:** `show access-lists ACL_<VLAN>_IN`. Counters rise as traffic matches. Deny lines also log (`%SEC-6-IPACCESSLOGP`).
 
@@ -124,19 +124,22 @@ Found by reading the configs against `plan.md`. Each links to the test that expo
 | 0.3 | DSW1, DSW2 | `show standby brief` | 23/46: DSW1 Active, DSW2 Standby. 61/67: DSW2 Active, DSW1 Standby. No `unknown` standby. | **Re-check** after P10 fix |
 | 0.4 | DSW1, DSW2 | `show ip route 0.0.0.0` | DSW1 `S* via 172.16.0.97`, DSW2 `S* via 172.16.0.101` (5 Nov design) | PASS 4 Nov (old design) |
 | 0.5 | DSW1, DSW2 | `show track 10` | Up on both (required for HSRP and route failover in the 5 Nov design) | |
-| 0.6 | ASA | `show ospf neighbor` | R2 `.113`, PA `.105`, DSW1 `.98`, DSW2 `.102`, all FULL | PASS 4 Nov (old design) |
+| 0.6 | ASA | `show ospf neighbor` | R1 `.109`, R2 `.113`, PA `.105`, DSW1 `.98`, DSW2 `.102`, all FULL | PASS 4 Nov (old design) |
 | 0.6a | DSW1, DSW2 | `show ip ospf neighbor` | ASA (`.97` / `.101`), PA (`.117` / `.121`), other DSW over Vlan100 (`.126` / `.125`), all FULL | |
 | 0.6b | ASA | `show route 172.16.0.56` and `show route 172.16.0.0` | HR via `.102` (DSW2), Staff via `.98` (DSW1) | |
 | 0.7 | ASA | `show route` | `0.0.0.0/0 via 172.16.0.105`; `172.16.0.80/29 via 172.16.0.105` (not connected `dmz`) | PASS 4 Nov |
-| 0.8 | ASA | `show nat` | No `obj_any` dynamic NAT | PASS 4 Nov |
+| 0.8 | ASA | `show nat` | Empty (no `obj_any`, no standby PAT after 5 Nov) | PASS 4 Nov (obj_any) |
 | 0.9 | PA | `show routing protocol ospf neighbor` | R1 `.90`, R2 `.91`, ASA `.106`, DSW1 `.118`, DSW2 `.122` full | PASS 4 Nov (old design: no DSWs) |
-| 0.10 | PA | `show routing route` | `0.0.0.0/0 via .90` (static `DEFAULT-OUT`); `172.16.0.72/29 via .106` (O2); HR/IT via `.106`, **not** via `.118`/`.122` | PASS 4 Nov |
+| 0.10 | PA | `show routing route` | `0.0.0.0/0 via .90` learned by OSPF (no static `DEFAULT-OUT` after 5 Nov); `172.16.0.72/29 via .106` (O2); HR/IT via `.106`, **not** via `.118`/`.122` | PASS 4 Nov |
 | 0.11 | PA | `show interface ethernet1/6`, `1/7` | Link state **up** (5 Nov design), IPs `.117/30`, `.121/30` | PASS 4 Nov (old design: down) |
 | 0.12 | PA | `show running security-policy` | `DENY-ALL` last; `TEMP-SVR-UPDATES` present only while installs are ongoing | PASS 4 Nov |
 | 0.13 | R1 | `show ip route 0.0.0.0` | Only `via 172.17.9.94` | PASS 4 Nov |
-| 0.14 | R1 | `show track` | Track 1 and 2 Up | PASS 4 Nov |
-| 0.15 | R1 | `show ip ospf neighbor` | PA `.92` + R2 `.91` on G0/0/1, R2 `.110` on G0/1/1, all FULL | PASS 4 Nov (after Mgmt-vrf fix) |
+| 0.14 | R1 | `show track` | Track 1 Up (track 2 removed 5 Nov) | PASS 4 Nov |
+| 0.15 | R1 | `show ip ospf neighbor` | PA `.92` + R2 `.91` on G0/0/1, ASA `.110` on G0/1/1, all FULL | PASS 4 Nov (old design: R2 `.110` on G0/1/1) |
 | 0.16 | R1 | `ping 172.17.9.94` | 5/5 | PASS 4 Nov |
+| 0.17 | R2 | `show track 1`; `ping 172.17.10.94`; `show ip ospf neighbor` | Track Up; 5/5; PA `.92` + R1 `.90` on G0/0/1, ASA `.114` on G0/1/1 | |
+| 0.18 | R1, R2 | `show ip nat translations` (with HR browsing) | R1: HR `.6x` -> `203.149.210.185`, plus the static `.189`/`.190`/`.185:2222` entries. R2: only static entries while R1 is up | |
+| 0.19 | PA, ASA, DSW | `show ip route 0.0.0.0` / `show routing route destination 0.0.0.0/0` | Default via R1 (metric ~10 + path), not R2 (50 + path) | |
 
 ---
 
@@ -161,7 +164,7 @@ Found by reading the configs against `plan.md`. Each links to the test that expo
 | 2.2 | HR-PC | `nslookup google.com` (uses `.83`) | Answer | 5.12a | PASS 4 Nov |
 | 2.3 | HR-PC | Browse google.com, twitch.tv | Loads | PA `HR-IT-INTERNET` | PASS 4 Nov |
 | 2.4 | HR-PC | `tracert -d 8.8.8.8` | `.57` -> `.97` -> `.105` -> `.90` -> `172.17.9.94` -> ... | Proves the serial path | |
-| 2.5 | PA | `test nat-policy-match from inside to outside source 172.16.0.61 destination 8.8.8.8 protocol 6 destination-port 443` | `NAT-OUTBOUND` -> `203.149.210.185` | | |
+| 2.5 | R1 | `show ip nat translations \| include 172.16.0.6` while HR browses | HR translated to `203.149.210.185` (PA NAT before 5 Nov) | | |
 | 2.6 | IT-PC | Repeat 2.1-2.3 | Same as HR | | |
 | 2.7 | STAFF-PC | `ping 8.8.8.8`; `Test-NetConnection 8.8.8.8 -Port 443` | **Both fail** | DSW `ACL_STAFF_IN` deny counter | |
 | 2.8 | ATM-PC | Same as 2.7 | **Both fail** | `ACL_ATM_IN` | |
@@ -257,10 +260,11 @@ Public mappings: Web `203.149.210.189` (80 + 443), DNS `203.149.210.190`, Jump `
 | ID | Test | Expected | Device check | Result |
 |----|------|----------|--------------|--------|
 | 6.1 | `curl -m 5 http://203.149.210.189` | Web page | PA `show session all filter destination 203.149.210.189` | |
-| 6.2 | `curl -k -m 5 https://203.149.210.189` / browser | Page (certificate warning) | PA NAT `NAT-WEB-HTTPS` | PASS 4 Nov |
+| 6.2 | `curl -k -m 5 https://203.149.210.189` / browser | Page (certificate warning) | R1 static NAT `.189:443`; PA `INBOUND-WEB` | PASS 4 Nov (PA NAT) |
 | 6.3 | `nslookup gruppesechs.sitict.net 203.149.210.190` | `203.149.210.189` | PA `show session all filter destination 203.149.210.190` | PASS 4 Nov |
 | 6.3a | `nslookup gruppesechs.sitict.net` (lab resolver) + browser `https://gruppesechs.sitict.net` | `.189`, page loads | Lab resolver `172.18.18.36` caches for the record's TTL | Pending (old `.186` cached on 4 Nov; re-check) |
-| 6.4 | `ssh -p 2222 <user>@203.149.210.185` | Jump host login | PA `JUMP-SSH-IN`, `NAT-JUMP-SSH` | PASS 4 Nov |
+| 6.4 | `ssh -p 2222 <user>@203.149.210.185` | Jump host login | R1 static NAT `.185:2222`; PA `JUMP-SSH-IN` | PASS 4 Nov (PA NAT) |
+| 6.4a | HR/IT PC: `nslookup gruppesechs.sitict.net`, then browse it | `172.16.0.82` (internal view); page loads | VM101 views (HANDOVER 8.10) | |
 | 6.5 | `ping 203.149.210.189` | **Fails** | | |
 | 6.6 | `ssh -p 22 <user>@203.149.210.185`; any port other than 2222 | **Fails** | | |
 | 6.7 | `ssh 172.17.9.93` (R1 WAN) | **Fails** | R1 `WAN-IN` final deny (P6) | |
@@ -327,8 +331,9 @@ One at a time, restore after each. Rows 9.2-9.4b are caused physically (unplug a
 | 9.3 | Unplug R1 G0/0/1 (R1 <-> PA) | PA reroutes via R2; internet recovers after OSPF converges | |
 | 9.4 | Power off the ASA (or unplug E1/3 **and** E1/4) | DSW `show track 10` Down on both; `show ip route 0.0.0.0` via PA (`.117` / `.121`); HR/IT internet and DMZ recover. Internal servers unreachable (by design). | |
 | 9.4a | Unplug DSW2 Gi1/0/11 (DSW2 <-> ASA E1/4) only | DSW2 track 10 Down; `show standby brief`: DSW1 Active for all four VLANs; HR internet recovers, still through the ASA (E1/3) | |
-| 9.4b | Power off the PA | ASA default via R2 `.113`; HR/IT internet recovers via the ASA standby PAT (.185). DMZ down (by design). Unplugging only PA eth1/3 is **not** a valid test: R1 still reaches `.92` and keeps returning traffic to the PA | |
-| 9.5 | Restore; re-run 0.1, 0.3, 0.5, 0.6, 2.1 | Baseline | |
+| 9.4b | Power off the PA | ASA `show route 0.0.0.0` via R1 `.109`; HR/IT internet recovers (R1 still NATs). DMZ down (by design) | |
+| 9.6 | Power off R1 (or unplug R1 G0/0/0) | PA/ASA default moves to R2 `.91`; HR `tracert -d 8.8.8.8` shows `172.17.10.94`; R2 `show ip nat translations` shows `129.126.142.185`. From outside, `curl -k https://129.126.142.189` works; the name doesn't (lab DNS points at ISP1) | |
+| 9.5 | Restore; re-run 0.1, 0.3, 0.5, 0.6, 0.19, 2.1 | Baseline (default back on R1) | |
 
 ---
 

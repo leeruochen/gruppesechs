@@ -89,6 +89,7 @@ sendln 'delete rulebase nat rules NAT-OUTBOUND'
 wait '[edit]'
 sendln 'delete rulebase nat rules TEMP-SVR-NAT'
 wait '[edit]'
+; NAT moved to R1/R2 on 5 Nov: pa440.ttl no longer recreates any NAT rules.
 
 ; ---------------------------------------------------------------------
 ; 4. DELETE ADDRESS-GROUPS (must be removed BEFORE their member addresses,
@@ -200,6 +201,10 @@ wait '[edit]'
 sendln 'delete network interface ethernet ethernet1/7 layer2'
 wait '[edit]'
 sendln 'delete network interface ethernet ethernet1/8 layer2'
+wait '[edit]'
+; Untracked static default via R1 (removed 5 Nov). OSPF supplies the default
+; from R1 or R2; this static would blackhole traffic when R1 is down.
+sendln 'delete network virtual-router default routing-table ip static-route DEFAULT-OUT'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------

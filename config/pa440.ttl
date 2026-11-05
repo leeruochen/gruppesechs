@@ -227,13 +227,10 @@ wait '[edit]'
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/7 enable yes passive no metric 500'
 wait '[edit]'
 
-; STATIC ROUTE: OPTIONAL (OSPF already provides it).
-; R1's 'default-information originate' already gives the PA an OSPF default
-; via R1 (.90). This static matches the live PA (route name DEFAULT-OUT) so a
-; rebuild reproduces it exactly. Static wins over the OSPF default while both
-; exist. Safe to remove: the PA then uses the OSPF default instead.
-sendln 'set network virtual-router default routing-table ip static-route DEFAULT-OUT destination 0.0.0.0/0 interface vlan.10 nexthop ip-address 172.16.0.90'
-wait '[edit]'
+; No static default (DEFAULT-OUT removed 5 Nov). The PA takes its default from
+; OSPF: R1 (ISP1, metric 10) normally, R2 (ISP2, metric 50) when R1 or ISP1 is
+; down. An untracked static via .90 would keep pointing at a dead R1 and
+; blackhole everything. pa440_cleanup.ttl deletes it from the live box.
 
 ; ---------------------------------------------------------------------
 ; 7. ADDRESS OBJECTS & GROUPS (Fixed GeoIP Clashes: HR-NET & IT-NET)
@@ -271,17 +268,8 @@ wait '[edit]'
 sendln 'set address JUMP2-SVR ip-netmask 172.16.0.85/32'
 wait '[edit]'
 
-; Public NAT IPs
-sendln 'set address PUB-PAT ip-netmask 203.149.210.185/32'
-wait '[edit]'
-; Public IPs for the DMZ services. Changed 4 Nov from .186/.187 to .189/.190 so
-; they match plan.md and the ASA's standby NAT (one public IP per service, even
-; after a failover). The NAT and security rules reference these objects, so
-; changing the value here moves everything.
-sendln 'set address PUB-WEB ip-netmask 203.149.210.189/32'
-wait '[edit]'
-sendln 'set address PUB-DNS ip-netmask 203.149.210.190/32'
-wait '[edit]'
+; Public IP objects (PUB-PAT / PUB-WEB / PUB-DNS) REMOVED 5 Nov: NAT moved to
+; R1/R2, so the PA only ever sees the servers' real addresses.
 
 ; Upstream resolvers for the DMZ DNS server's forwarders (P5 fix, 4 Nov)
 sendln 'set address DNS-FORWARDERS-1 ip-netmask 8.8.8.8/32'
@@ -305,27 +293,19 @@ wait '[edit]'
 ; DSW1-SVI / DSW2-SVI / DSWs and service UDP-67 REMOVED 5 Nov: only the
 ; deleted PTSO-DHCP-RELAY rule (inside -> server) used them.
 
-; Custom Service Objects & Schedules
-sendln 'set service TCP-2222 protocol tcp port 2222'
-wait '[edit]'
+; Schedules (service TCP-2222 removed 5 Nov: R1/R2 translate 2222 -> 22, so
+; the PA sees jump SSH as plain tcp/22)
 sendln 'set schedule TXN-WINDOW recurring weekly monday 01:00-03:00 tuesday 01:00-03:00 wednesday 01:00-03:00 thursday 01:00-03:00 friday 01:00-03:00'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 8. NAT RULES (PTSO Standby NAT on PA-440)
+; 8. NAT RULES: none (5 Nov)
 ; ---------------------------------------------------------------------
-sendln 'set rulebase nat rules NAT-WEB from outside to outside source any destination PUB-WEB service service-http destination-translation translated-address WEB-SVR'
-wait '[edit]'
-; HTTPS to the web server from outside (P4 fix, added 4 Nov). NAT-WEB only
-; matches service-http (80/8080); INBOUND-WEB already allows App-ID ssl.
-sendln 'set rulebase nat rules NAT-WEB-HTTPS from outside to outside source any destination PUB-WEB service service-https destination-translation translated-address WEB-SVR'
-wait '[edit]'
-sendln 'set rulebase nat rules NAT-DNS from outside to outside source any destination PUB-DNS service any destination-translation translated-address DNS-SVR'
-wait '[edit]'
-sendln 'set rulebase nat rules NAT-JUMP-SSH from outside to outside source any destination PUB-PAT service TCP-2222 destination-translation translated-address JUMP-SVR translated-port 22'
-wait '[edit]'
-sendln 'set rulebase nat rules NAT-OUTBOUND from [ inside dmz ] to outside source [ HR-NET IT-NET TXN-SVR JUMP-SVR JUMP2-SVR DNS-SVR ] destination any service any source-translation dynamic-ip-and-port translated-address PUB-PAT'
-wait '[edit]'
+; NAT moved to the edge routers so each ISP's public block is translated by
+; the router that owns it (R1: 203.149.210.184/29, R2: 129.126.142.184/29).
+; The PA still enforces every security rule below; it now sees real inside
+; and outside addresses in both directions. pa440_cleanup.ttl deletes the old
+; NAT-WEB, NAT-WEB-HTTPS, NAT-DNS, NAT-JUMP-SSH and NAT-OUTBOUND rules.
 
 ; ---------------------------------------------------------------------
 ; 9. SECURITY RULES
@@ -335,11 +315,13 @@ sendln 'set rulebase security rules ALLOW-OSPF from [ outside inside ] to [ outs
 wait '[edit]'
 
 ; Inbound DMZ Access
-sendln 'set rulebase security rules INBOUND-WEB from outside to dmz source any destination PUB-WEB source-user any category any application [ web-browsing ssl ] service application-default action allow log-end yes'
+; 5 Nov: destinations are the servers' REAL addresses. R1/R2 already
+; translated the public IP (and 2222 -> 22) before the packet reaches the PA.
+sendln 'set rulebase security rules INBOUND-WEB from outside to dmz source any destination WEB-SVR source-user any category any application [ web-browsing ssl ] service application-default action allow log-end yes'
 wait '[edit]'
-sendln 'set rulebase security rules INBOUND-DNS from outside to dmz source any destination PUB-DNS source-user any category any application dns service application-default action allow log-end yes'
+sendln 'set rulebase security rules INBOUND-DNS from outside to dmz source any destination DNS-SVR source-user any category any application dns service application-default action allow log-end yes'
 wait '[edit]'
-sendln 'set rulebase security rules JUMP-SSH-IN from outside to dmz source any destination PUB-PAT source-user any category any application ssh service TCP-2222 action allow log-end yes'
+sendln 'set rulebase security rules JUMP-SSH-IN from outside to dmz source any destination JUMP-SVR source-user any category any application ssh service application-default action allow log-end yes'
 wait '[edit]'
 
 ; Internal Inter-VLAN Transit
@@ -362,8 +344,8 @@ sendln 'set rulebase security rules DMZ-OUTBOUND-NTP from dmz to outside source 
 wait '[edit]'
 
 ; DMZ DNS server recursion to upstream forwarders (P5 fix, applied live 4 Nov).
-; NAT: DNS-SVR is also in NAT-OUTBOUND's source list, so these queries leave
-; as 203.149.210.185. NAT-DNS is destination-only (inbound) and doesn't cover them.
+; NAT: DNS-SVR is in the routers' NAT-SOURCES ACL, so these queries leave as
+; the router's PAT address (.185 of whichever ISP block is in use).
 sendln 'set rulebase security rules DNS-SVR-FORWARD from dmz to outside source DNS-SVR destination [ ICT-DNS DNS-FORWARDERS-1 DNS-FORWARDERS-2 ] source-user any category any application dns service application-default action allow log-end yes'
 wait '[edit]'
 

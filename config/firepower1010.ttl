@@ -69,7 +69,7 @@ wait '#'
 ; CRITICAL (PTSO): remove the factory default dynamic NAT. Without this, the ASA
 ; PATs all inside->outside traffic to its own outside interface (172.16.0.106),
 ; which breaks the serial design - HR must traverse the ASA UN-NAT'd so the
-; PA-440 performs the single outbound PAT to 203.149.210.185. Return traffic for
+; edge routers (R1/R2) do the only outbound PAT. Return traffic for
 ; .106 has no internet path, so leaving this in place silently blackholes HR.
 sendln 'object network obj_any'
 wait '#'
@@ -116,10 +116,14 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; PTSO Router Bypass Link to R2 (G0/0/0 - Cost 500)
+; PA-Bypass Links to the routers (cost 500, used only when the PA is down)
+;   E1/2 wan-backup  -> R2 G0/1/1  172.16.0.112/30 (ASA .114, R2 .113)
+;   E1/5 wan-backup2 -> R1 G0/1/1  172.16.0.108/30 (ASA .110, R1 .109)
+; With the PA down, the ASA prefers R1 (ISP1 default metric 10 vs R2's 50).
+; (5 Nov: R2's end moved from G0/0/0 to G0/1/1, G0/0/0 is now ISP2.)
 sendln 'interface Ethernet1/2'
 wait '#'
-sendln 'description PTSO_Bypass_Link_to_R2_G0_0_0'
+sendln 'description PA_Bypass_Link_to_R2_G0_1_1'
 wait '#'
 sendln 'no switchport'
 wait '#'
@@ -145,7 +149,7 @@ wait '#'
 ; Giving each DSW its own /30 removes that limit:
 ;   E1/3 inside  -> DSW1 G1/0/11  172.16.0.96/30   (ASA .97,  DSW1 .98)
 ;   E1/4 inside2 -> DSW2 G1/0/11  172.16.0.100/30  (ASA .101, DSW2 .102)
-; Both carry the same INSIDE_IN ACL and the same standby PAT, so users are
+; Both carry the same INSIDE_IN ACL, so users are
 ; treated identically whichever DSW they enter through. The DSWs advertise each
 ; user VLAN cheaper from its HSRP Active switch, so return traffic leaves on
 ; the same interface the outbound traffic arrived on.
@@ -195,12 +199,25 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Unused Port Ethernet1/5 Shut Down
 sendln 'interface Ethernet1/5'
 wait '#'
-sendln 'description UNUSED_PORT'
+sendln 'description PA_Bypass_Link_to_R1_G0_1_1'
 wait '#'
-sendln 'shutdown'
+sendln 'no switchport'
+wait '#'
+sendln 'nameif wan-backup2'
+wait '#'
+sendln 'security-level 0'
+wait '#'
+sendln 'ip address 172.16.0.110 255.255.255.252'
+wait '#'
+sendln 'speed 1000'
+wait '#'
+sendln 'duplex full'
+wait '#'
+sendln 'no shutdown'
+wait '#'
+sendln 'ospf cost 500'
 wait '#'
 sendln 'exit'
 wait '#'
@@ -298,7 +315,7 @@ wait '#'
 ;   router ospf', i.e. on teardown - ruling out a paste-speed/scale cause).
 ;   OSPF adjacencies are only NEEDED on the ROUTED PHYSICAL transit links:
 ;     inside (E1/3 -> DSW1), inside2 (E1/4 -> DSW2), outside (E1/1 -> PA),
-;     wan-backup (E1/2 -> R2).
+;     wan-backup (E1/2 -> R2), wan-backup2 (E1/5 -> R1).
 ;   So we DO NOT run OSPF on the server SVI; instead 'redistribute connected
 ;   subnets' advertises 172.16.0.72/29 into the domain as an external route.
 ;   Expected neighbors (all FULL, point-to-point /30s): DSW1, DSW2, PA, R2.
@@ -311,6 +328,8 @@ wait '#'
 sendln 'network 172.16.0.100 255.255.255.252 area 0'
 wait '#'
 sendln 'network 172.16.0.104 255.255.255.252 area 0'
+wait '#'
+sendln 'network 172.16.0.108 255.255.255.252 area 0'
 wait '#'
 sendln 'network 172.16.0.112 255.255.255.252 area 0'
 wait '#'
@@ -427,13 +446,6 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-sendln 'object network PUB-PAT'
-wait '#'
-sendln 'host 203.149.210.185'
-wait '#'
-sendln 'exit'
-wait '#'
-
 sendln 'object-group network STAFF-ATM'
 wait '#'
 sendln 'network-object object STAFF'
@@ -498,33 +510,10 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-sendln 'object-group network PAT-USERS'
-wait '#'
-sendln 'network-object object HR'
-wait '#'
-sendln 'network-object object IT'
-wait '#'
-sendln 'network-object object TXN-SVR'
-wait '#'
-sendln 'network-object object JUMP-SVR'
-wait '#'
-sendln 'network-object object JUMP2-SVR'
-wait '#'
-sendln 'exit'
-wait '#'
-
-; 9. PTSO Standby PAT (used only when the PA is down)
-; Traffic leaves via wan-backup (E1/2 -> R2) only when the OSPF path through
-; the PA disappears, so these rules are idle in normal operation.
-; The DMZ standby NAT (web .189, DNS .190, jump SSH .185:2222) was REMOVED
-; 5 Nov together with the ASA's DMZ interface: with no Vlan92 the ASA has no
-; path to the DMZ, so those rules could never match.
-sendln 'nat (inside,wan-backup) after-auto source dynamic PAT-USERS PUB-PAT'
-wait '#'
-sendln 'nat (inside2,wan-backup) after-auto source dynamic PAT-USERS PUB-PAT'
-wait '#'
-sendln 'nat (server,wan-backup) after-auto source dynamic PAT-USERS PUB-PAT'
-wait '#'
+; 9. NAT: none on the ASA (5 Nov). NAT moved to R1/R2, so the ASA's old
+; standby PAT (PAT-USERS -> PUB-PAT on wan-backup) and its objects were
+; removed. When the PA is down, traffic goes ASA -> R1 (or R2) un-NAT'd and the
+; router translates it, the same as traffic coming from the PA.
 
 ; 10. Time-Range for Transactions Server
 sendln 'time-range TXN-WINDOW'
@@ -607,6 +596,8 @@ wait '#'
 sendln 'access-group OUTSIDE_IN in interface outside'
 wait '#'
 sendln 'access-group OUTSIDE_IN in interface wan-backup'
+wait '#'
+sendln 'access-group OUTSIDE_IN in interface wan-backup2'
 wait '#'
 
 ; 12. Modular Policy Framework (MPF) - Stateful ICMP Inspection

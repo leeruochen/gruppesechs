@@ -85,6 +85,13 @@ No VLANs should be able to access each other
   - R1 G0/0/0: 172.17.9.93  
   - ISP1 Public block: 203.149.210.184/29
 
+1x ISP2 (added 5 Nov, redundancy only; approved by the prof)
+
+- IP address block: 172.17.10.92/30  
+  - ISP2 Router IP: 172.17.10.94  
+  - R2 G0/0/0: 172.17.10.93  
+  - ISP2 Public block: 129.126.142.184/29
+
 We placed our firewalls in a serial formation where the NGFW(PA-440) intercepts the packets first then the ASA(Firepower 1010\) filters again. The main security benefit here is containment. In the event that the first NGFW gets broken into, the attacker would only have access to our DMZ zone, they would need to break into the ASA in order to get access into our Inside zone. Vice Versa.
 
 # **VLSM**
@@ -190,11 +197,11 @@ Usable IP: 172.16.0.82 to 172.16.0.86
 
 - PA vlan.92 (on eth1/4, cabled directly to Proxmox eno5): 172.16.0.81  
 - VM100(Web): 172.16.0.82  
-  - public 203.149.210.189 (PA NAT-WEB / NAT-WEB-HTTPS)  
+  - public 203.149.210.189 (R1 static NAT; 129.126.142.189 on R2)  
 - VM101(DNS): 172.16.0.83  
-  - public 203.149.210.190 (PA NAT-DNS)  
+  - public 203.149.210.190 (R1 static NAT; 129.126.142.190 on R2)  
 - VM102(TACACS+ 1 / Jump 1): 172.16.0.84  
-  - public 203.149.210.185 tcp/2222 -> .84:22 (PA NAT-JUMP-SSH)  
+  - public 203.149.210.185 tcp/2222 -> .84:22 (R1 static NAT; 129.126.142.185 on R2)  
 - VM106(TACACS+ 2 / Jump 2): 172.16.0.85  
 - .86: unused. The ASA backup gateway (Vlan92 on E1/7) was removed 5 Nov. The DMZ belongs to the PA only; if the PA fails, the DMZ is unreachable by design.  
 - Servers reach this VLAN through Proxmox eno5 (vmbr2) -> PA eth1/4 directly (no DSW in the path since 5 Nov)
@@ -220,7 +227,7 @@ The old shared VLAN 100 segment (172.16.0.96/29) was split into two point-to-poi
 
 - ASA E1/3 (nameif inside) <-> DSW1 Gi1/0/11 (routed): 172.16.0.96/30, ASA .97, DSW1 .98, broadcast .99  
 - ASA E1/4 (nameif inside2) <-> DSW2 Gi1/0/11 (routed): 172.16.0.100/30, ASA .101, DSW2 .102, broadcast .103  
-- OSPF cost 10 on both. `inside` and `inside2` share the INSIDE_IN ACL and the standby PAT.
+- OSPF cost 10 on both. `inside` and `inside2` share the INSIDE_IN ACL.
 
 ## **PA ASA-bypass links (routed /30s, 5 Nov)**
 
@@ -245,24 +252,26 @@ Usable IP: 172.16.0.105 to 172.16.0.106
 
 Broadcast: 172.16.0.107
 
-## **Router to Router**
+## **R1 to ASA bypass (was Router to Router until 5 Nov)**
 
-IP block: 172.16.0.108/30  
-Usable IP: 
+IP block: 172.16.0.108/30
 
-- r1 g0/1/1: 172.16.0.109  
-- r2 g0/1/1: 172.16.0.110
+- R1 g0/1/1: 172.16.0.109  
+- ASA E1/5 (nameif wan-backup2): 172.16.0.110  
+- OSPF cost 500, only used if the PA fails
 
-this allows communication between our routers via the direct links connection to them
+The direct R1-R2 link was removed when R2 got its own ISP. R1 and R2 still see each other in OSPF over the PA's VLAN 10 segment.
 
 - each routed port in the router needs it own unique IP address and SUBNET  
 - this is why we cant use the spare .93 and .94 from the routers to pa subnet as it will cause overlap
+
+Broadcast: 172.16.0.111
 
 ## **R2 to ASA bypass**
 
 IP block: 172.16.0.112/30
 
-- R2 g0/0/0: 172.16.0.113  
+- R2 g0/1/1: 172.16.0.113 (moved from g0/0/0, which is now ISP2)  
 - ASA E1/2 (nameif wan-backup): 172.16.0.114  
 - OSPF cost 500, only used if the PA fails
 
@@ -270,11 +279,16 @@ Broadcast: 172.16.0.115
 
 ## **WAN and public addresses**
 
-- WAN 172.17.9.92/30: R1 G0/0/0 172.17.9.93, ISP1 172.17.9.94  
-- Public block 203.149.210.184/29 (NAT done only on the PA):  
+NAT is done on the routers (5 Nov). Each router translates to its own ISP's block, so traffic always leaves with the right public address. The PA and ASA don't NAT.
+
+- WAN1 172.17.9.92/30: R1 G0/0/0 172.17.9.93, ISP1 172.17.9.94 (primary)  
+- WAN2 172.17.10.92/30: R2 G0/0/0 172.17.10.93, ISP2 172.17.10.94 (backup, used only when R1 or ISP1 is down)  
+- Public blocks, same layout on both (ISP1 203.149.210.184/29 on R1, ISP2 129.126.142.184/29 on R2):  
   - .185: outbound PAT for HR, IT, Txn, DNS server and jump hosts, plus tcp/2222 -> jump host .84:22  
   - .189: web server .82 (tcp/80, tcp/443)  
-  - .190: DNS server .83
+  - .190: DNS server .83  
+- The lab DNS only knows the ISP1 addresses (.189). With R1 down, outsiders reach the servers by the ISP2 IPs only.  
+- Inside users never use the public IPs (the routers don't hairpin NAT). VM101's internal view gives HR/IT 172.16.0.82 for gruppesechs.sitict.net.
 
 ## **Other VLANs**
 
@@ -557,7 +571,7 @@ both DSW
 - MGMT-ONLY standard acl permits 172.16.0.44 and .45 to access vty ssh only, deny any log  
   - when engineer wants to ssh to the jump host from internet  
 1. ssh \-p 2222 bigDonkBonkAdmin@203.149.210.185(public isp ip)  
-2. PA has a dest NAT rule to forward this to Jump Host DMZ int 172.16.0.84  
+2. R1 has a static NAT (port forward) that sends this to Jump Host DMZ int 172.16.0.84:22; the PA rule JUMP-SSH-IN allows it  
 - if local connect from internal IT VLAN 67  
 1. ssh bigDonkBonkAdmin@172.16.0.84 or .85 (jump hosts)  
 - engineer authenticates with credentials and lands in shell  
@@ -594,9 +608,11 @@ both DSW
 
 ## **Routers**
 
-R1 holds the physical WAN connection (G0/0/0 172.17.9.93 to the ISP1 gateway 172.17.9.94) and tracks reachability via IP SLA 1\. R1 also holds the static route directing the public IP block (203.149.210.184/29) to the PA-440 (172.16.0.92). The public block is **not** advertised into OSPF (the PA holds it only as NAT addresses), so R2 has its own copy of that static route.
+R1 holds the primary WAN connection (G0/0/0 172.17.9.93 to the ISP1 gateway 172.17.9.94) and tracks it with IP SLA 1. R2 holds the backup WAN connection (G0/0/0 172.17.10.93 to the ISP2 gateway 172.17.10.94), tracked the same way. Both advertise a default route into OSPF only while their ISP answers: R1 at metric 10, R2 at metric 50, so ISP1 is always preferred and ISP2 only takes over when R1 or ISP1 fails.
 
-R2 serves as the redundant internal transit router between R1 (G0/1/1, OSPF cost 5\) and the PA-440 (G0/0/1, OSPF cost 20 vs. R1's cost 10), as well as the backup OOB management router (172.16.0.34).
+Since 5 Nov each router also does the NAT for its own ISP block (PAT for outbound, static port forwards for web, DNS and jump SSH). Doing NAT on the router that owns the block means no device has to choose a public address based on which ISP is in use, and the public addresses end at the router, so no public-block static routes or PA tracking are needed. The PA still enforces every security rule; NAT itself isn't a security control.
+
+Each router also has a cost-500 link to the ASA (R1 G0/1/1 -> E1/5, R2 G0/1/1 -> E1/2), used only when the PA is down. R2 is the backup OOB management router (172.16.0.34).
 
 R1
 
@@ -609,14 +625,21 @@ R1
 - int g0/0/0, connected to isp  
   - ip add 172.17.9.93 255.255.255.252  
   - ip access-group WAN-IN in  
+  - ip nat outside  
 - int g0/0/1, to PA eth1/5  
-  - ip add 172.16.0.90 255.255.255.248  
+  - ip add 172.16.0.90 255.255.255.248, ip nat inside  
   - ospf 1 area 0, cost 10, while r2’s g0/0/1’s costs is 20  
-- int g0/1/1, inter router (to R2 g0/1/1)  
-  - no vrf forwarding Mgmt-vrf first: the lab image puts this port in the factory Mgmt-vrf, which kept the R1-R2 link out of OSPF. That command deletes the IP, so the IP is set straight after.  
-  - ip add 172.16.0.109 255.255.255.252  
-  - ospf 1 area 0, cost 5  
-    - these cost allow r1 to PA to be priority 1, then r2 be priority 2\.  
+- int g0/1/1, PA bypass to ASA E1/5 (was the R1-R2 link until 5 Nov)  
+  - no vrf forwarding Mgmt-vrf first: the lab image puts this port in the factory Mgmt-vrf, which keeps it out of OSPF. That command deletes the IP, so the IP is set straight after.  
+  - ip add 172.16.0.109 255.255.255.252, ip nat inside  
+  - ospf 1 area 0, cost 500 (only used when the PA is down)  
+- NAT (moved from the PA, 5 Nov)  
+  - ip access-list extended NAT-SOURCES: HR 172.16.0.56/29, IT 172.16.0.64/29, Txn .76, DNS .83, jump hosts .84/.85 (second layer behind the PA; Staff/ATM can't be translated even if a firewall rule were wrong)  
+  - ip nat pool PUB-PAT 203.149.210.185 203.149.210.185 prefix-length 29  
+  - ip nat inside source list NAT-SOURCES pool PUB-PAT overload  
+  - ip nat inside source static tcp 172.16.0.82 80 / 443 -> 203.149.210.189 80 / 443 extendable  
+  - ip nat inside source static udp and tcp 172.16.0.83 53 -> 203.149.210.190 53 extendable  
+  - ip nat inside source static tcp 172.16.0.84 22 -> 203.149.210.185 2222 extendable  
 - all routed ports: ip flow monitor bank-flow-monitor input, no ip redirects, no ip proxy-arp  
 - ip sla 1  
   - ip sla sends periodic icmp pings out g0/0/0 to isp gateway to ensure its working, so we can track to see if the traffic is running  
@@ -624,11 +647,10 @@ R1
   - frequency 5  
 - ip sla schedule 1 life forever start-time now  
 - track 1 ip sla 1 reachability  
-- ip sla 2 (icmp-echo 172.16.0.92, frequency 5), track 2 ip sla 2 reachability  
+- ip sla 2 / track 2 (ping the PA .92) removed 5 Nov: they only guarded the public-block routes to the PA, which aren't needed with NAT on the router  
 - ip routes  
   - ip route 0.0.0.0 0.0.0.0 172.17.9.94 track 1 (REQUIRED, source of the OSPF default). Must point at the ISP .94, never .93 (R1 itself).  
-  - ip route 203.149.210.184 255.255.255.248 172.16.0.92 track 2 (REQUIRED, public block to the PA)  
-  - ip route 203.149.210.184 255.255.255.248 172.16.0.110 250 (OPTIONAL, floating route via R2 if the PA stops answering)  
+  - ip route 203.149.210.184 255.255.255.248 Null0 (OPTIONAL, drops traffic for unused public IPs instead of looping it back to the ISP)  
 - aaa  
   - tacacs server TACACS1  
     - address ipv4 172.16.0.44  
@@ -673,22 +695,23 @@ R1
   - no passive-interface g0/1/1  
   - network 172.16.0.88 0.0.0.7 area 0, network 172.16.0.108 0.0.0.3 area 0  
   - default-information originate metric 10 metric-type 1  
-    - only advertises the default route while R1 has one, i.e. while track 1 is up. If ISP1 goes down, the tracked static route is withdrawn and R1 stops advertising the default. There is no second ISP, so there is no internet failover.  
-  - used to determine which link it will travel down to the PA, lets say R1’s connection to PA is down, ospf will help route the packers through R2 for redundancy of that link  
+    - only advertises the default route while R1 has one, i.e. while track 1 is up. If ISP1 goes down, the tracked static route is withdrawn and R1 stops advertising the default, so everything follows R2's backup default (metric 50) to ISP2.  
+    - metric-type 1 (E1): each device adds its own path cost to the metric, so with both ISPs up every device picks R1, and with the PA down the ASA picks R1 over its direct link (10 + 500) before R2 (50 + 500).  
 - ![][image1]
 
 R2
 
 - same base, AAA, SSH, NTP, syslog, NetFlow and parser view config as R1, router-id 2.2.2.2  
-- int g0/0/0, PTSO bypass to ASA E1/2: ip add 172.16.0.113 255.255.255.252, ospf cost 500  
-- int g0/0/1, to PA eth1/2: ip add 172.16.0.91 255.255.255.248, ospf cost 20  
+- int g0/0/0, WAN to ISP2 (5 Nov): ip add 172.17.10.93 255.255.255.252, ip access-group WAN-IN in, ip nat outside  
+- int g0/0/1, to PA eth1/2: ip add 172.16.0.91 255.255.255.248, ip nat inside, ospf cost 20  
 - int g0/1/0, OOB (cabled to DSW2 Gi1/0/22): ip add 172.16.0.34 255.255.255.240, vrf forwarding OOB  
-- int g0/1/1, to R1: no vrf forwarding Mgmt-vrf, no ip dhcp client client-id, ip add 172.16.0.110 255.255.255.252, ospf cost 5  
-- no WAN-IN ACL and no ip sla 1 (R2 has no WAN link)  
-- ip sla 2 / track 2 to the PA .92  
-- ip route 203.149.210.184 255.255.255.248 172.16.0.92 track 2 (REQUIRED, used when R1 hands public-block traffic to R2)  
-- ip route 203.149.210.184 255.255.255.248 172.16.0.114 250 (OPTIONAL, floating route to the ASA wan-backup if the PA fails)  
-- ospf: no passive-interface g0/0/0, g0/0/1, g0/1/1; networks 172.16.0.88/29, .108/30, .112/30; no default-information originate
+- int g0/1/1, PA bypass to ASA E1/2: no vrf forwarding Mgmt-vrf, no ip dhcp client client-id, ip add 172.16.0.113 255.255.255.252, ip nat inside, ospf cost 500  
+- WAN-IN (same pattern as R1, for .93 and 129.126.142.184/29)  
+- ip sla 1 (icmp-echo 172.17.10.94 source g0/0/0), track 1  
+- ip route 0.0.0.0 0.0.0.0 172.17.10.94 track 1 (REQUIRED, source of the backup OSPF default)  
+- ip route 129.126.142.184 255.255.255.248 Null0 (OPTIONAL)  
+- NAT: same NAT-SOURCES ACL and mappings as R1 on 129.126.142.185 / .189 / .190  
+- ospf: no passive-interface g0/0/1, g0/1/1; networks 172.16.0.88/29, .112/30; default-information originate metric 50 metric-type 1
 
 router acls
 
@@ -697,14 +720,15 @@ router acls
   - when the linux sends the packet, its source ip would be either tacacs1(.44) or tacacs2(.45)  
   - thats why we permit .44 or .45  
 - WAN-IN is an ingress acl to filter outside traffic coming in  
-  - denies port 22 and 23, permits icmp echo replies from .94 to .93 (ip sla), permits packets destined for PA’s nat (203.149.210.184/29), permit established tcp return traffic to .93, then deny all  
+  - denies port 22 and 23, permits icmp echo replies from .94 to .93 (ip sla), permits packets destined for the router's own public block (203.149.210.184/29 on R1, 129.126.142.184/29 on R2; checked before NAT), permit established tcp return traffic to .93, then deny all  
   - web server is .189, dns is .190  
   - open issue (P6): the tcp/22 and tcp/23 denies in the macro reference host 172.17.9.94 (the ISP). They should reference R1's own IP .93.
 
 router PTSO
 
-- R2 G0/0/0 is activated as the PTSO Bypass Link to ASA Ethernet1/2 (172.16.0.112/30: R2 .113, ASA .114, ip ospf cost 500\)  
-- Tracked Public NAT Block Route (203.149.210.184/29): Added ip sla 2 (icmp-echo 172.16.0.92) and Floating Static Routes (AD 250\) so if the PA-440 (172.16.0.92) goes down, R1 sends the public IP block to R2 (.110), and R2 sends it to the ASA's wan-backup interface (172.16.0.114)
+- PA bypass links: R1 G0/1/1 -> ASA E1/5 (172.16.0.108/30) and R2 G0/1/1 -> ASA E1/2 (172.16.0.112/30), both ip ospf cost 500. Used only when the PA is down; the router then NATs the ASA's traffic the same way.  
+- ISP failover: R1/ISP1 down -> R1's default is withdrawn -> R2's backup default (metric 50) takes over -> traffic leaves as 129.126.142.185.  
+- R2's link to the PA down while R1 is up: nothing changes, traffic stays on R1 (R2 only carries traffic when R1 is down).
 
 
 ## **NetFlow v9 configuration for Routers and Distribution Switches**
@@ -769,12 +793,12 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
 - clear configure dhcpd  
   - remove factory defaults for internal dhcp daemon  
 - object network obj\_any  
-  - no nat (any,outside) dynamic interface, removes default dynamic NAT. Without this the ASA PATs HR/IT to .106 and their internet traffic is blackholed. Only the PA does outbound NAT.  
+  - no nat (any,outside) dynamic interface, removes default dynamic NAT. Without this the ASA PATs HR/IT to .106 and their internet traffic is blackholed. Only the routers (R1/R2) do NAT.  
 - int vlan1, no nameif, no security-level, no ip, shutdown  
 - int e1/1, connect to PA eth1/3 (routed)  
   - nameif outside, security-level 0  
   - ip add 172.16.0.106 255.255.255.252, speed 1000, duplex full, ospf cost 10  
-- int e1/2, connect to R2 g0/0/0 (routed, PTSO bypass)  
+- int e1/2, connect to R2 g0/1/1 (routed, PA bypass)  
   - nameif wan-backup, security-level 0  
   - ip add 172.16.0.114 255.255.255.252, speed 1000, duplex full, ospf cost 500  
 - int e1/3, connect to DSW1 g1/0/11 (routed)  
@@ -784,8 +808,11 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
 - int e1/4, connect to DSW2 g1/0/11 (routed, added 5 Nov)  
   - nameif inside2, security-level 100  
   - ip add 172.16.0.101 255.255.255.252, speed 1000, duplex full, ospf cost 10  
-  - its own /30, so it doesn't clash with e1/3. Same INSIDE\_IN ACL and standby PAT as inside.  
-- int e1/5, e1/7 and e1/8, unused, shutdown  
+  - its own /30, so it doesn't clash with e1/3. Same INSIDE\_IN ACL as inside.  
+- int e1/5, connect to R1 g0/1/1 (routed, PA bypass, added 5 Nov)  
+  - nameif wan-backup2, security-level 0  
+  - ip add 172.16.0.110 255.255.255.252, speed 1000, duplex full, ospf cost 500  
+- int e1/7 and e1/8, unused, shutdown  
   - e1/7 used to carry the DMZ backup (Vlan92 dmz .86). Removed 5 Nov: the DMZ belongs to the PA only.  
 - int e1/6, connect directly to Proxmox eno2 (vmbr1)  
   - switchport access vlan 69  
@@ -817,13 +844,11 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - object network INTERNAL, subnet 172.16.0.0 255.255.255.128  
   - object network FILE-SVR host .74, ACCT-SVR host .75, TXN-SVR host .76, DHCP-SVR host .77  
   - object network WEB-SVR host .82, DNS-SVR host .83, JUMP-SVR host .84, JUMP2-SVR host .85  
-  - object network PUB-PAT host 203.149.210.185  
   - object-group network STAFF-ATM (STAFF, ATM)  
   - object-group network HR-IT (HR, IT)  
   - object-group network DSWs (172.16.0.98, .102)  
   - object-group network DSW-SVIS (every DSW address that can source a DHCP relay: .2 .3 .50 .51 .58 .59 .66 .67 .98 .102)  
   - object-group network JUMP-SVRs (JUMP-SVR, JUMP2-SVR)  
-  - object-group network PAT-USERS (HR, IT, TXN-SVR, JUMP-SVR, JUMP2-SVR)  
 - time-range (to be given on demo day)  
   - time-range TXN-WINDOW  
     - periodic weekdays 01:00 to 03:00  
@@ -853,6 +878,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
 - access-group SERVER\_IN in interface server  
 - access-group OUTSIDE\_IN in interface outside  
 - access-group OUTSIDE\_IN in interface wan-backup  
+- access-group OUTSIDE\_IN in interface wan-backup2  
 - MPF config  
   - policy-map global\_policy  
     - class inspection\_default  
@@ -880,11 +906,11 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - asa needs ntp here also for txn time range, timestamps for logs  
   - .44/.45 run chrony (VM102/VM106), which syncs from the internet pool through the PA  
 - PTSO  
-  - Ethernet1/2 (wan-backup, security-level 0): Connected to R2 G0/0/0 (172.16.0.114/30, ospf cost 500\)  
+  - Ethernet1/2 (wan-backup) to R2 G0/1/1 (172.16.0.114/30) and Ethernet1/5 (wan-backup2) to R1 G0/1/1 (172.16.0.110/30), ospf cost 500: used only when the PA is down  
   - Vlan69 (server, security-level 60): Internal Servers Gateway (172.16.0.73/29) on Ethernet1/6 (cabled directly to Proxmox eno2), redistributed into OSPF  
   - Ethernet1/3 (inside) and Ethernet1/4 (inside2): one routed /30 to each DSW, both active  
-  - Standby PAT (bound strictly to wan-backup): dynamic PAT (after-auto, from inside, inside2 and server) for PAT-USERS to .185, used only when traffic exits wan-backup during a PA-440 failure  
-  - No DMZ interface (removed 5 Nov). If the PA fails, users and internal servers keep internet via wan-backup; the DMZ is down by design.
+  - No NAT on the ASA (5 Nov). The old standby PAT was removed: with the PA down, traffic reaches R1 directly un-NAT'd and R1 translates it as usual  
+  - No DMZ interface (removed 5 Nov). If the PA fails, users and internal servers keep internet via R1 (wan-backup2), or R2 if R1 is also down; the DMZ is down by design.
 
 ## **PA-440**
 
@@ -943,30 +969,28 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
     - interface \<name\> enable yes, enables ospf on that interface, like ip ospf 1 area 0  
     - passive no/yes, just makes the interface not passive which will send ospf packets  
   - ospf is enabled here so that routing towards R1/R2 is achieved, and can switch in the event r1’s link fails.  
-  - static-route DEFAULT-OUT 0.0.0.0/0 interface vlan.10 nexthop 172.16.0.90 (OPTIONAL, OSPF also provides it)  
+  - no static default (DEFAULT-OUT removed 5 Nov): OSPF supplies it from R1, or R2 when R1/ISP1 is down. An untracked static via .90 would blackhole traffic with R1 down  
 - object creation  
   - address STAFF 172.16.0.0/27, ATM 172.16.0.48/29, HR-NET 172.16.0.56/29, IT-NET 172.16.0.64/29 (HR-NET/IT-NET named to avoid clashing with GeoIP country codes)  
   - address SERVERS 172.16.0.72/29, DMZ-SUBNET 172.16.0.80/29  
   - address FILE-SVR .74, ACCT-SVR .75, TXN-SVR .76, DHCP-SVR .77  
   - address WEB-SVR .82, DNS-SVR .83, JUMP-SVR .84, JUMP2-SVR .85  
-  - address PUB-PAT 203.149.210.185/32, PUB-WEB 203.149.210.189/32, PUB-DNS 203.149.210.190/32  
+  - PUB-PAT / PUB-WEB / PUB-DNS removed 5 Nov (no NAT on the PA)  
   - address DNS-FORWARDERS-1 8.8.8.8/32, DNS-FORWARDERS-2 1.1.1.1/32, ICT-DNS 172.18.4.32/32 (lab caching DNS, needed for other racks' names)  
   - address-group STAFF-ATM \[ STAFF ATM \], HR-IT \[ HR-NET IT-NET \], INTERNET-USERS \[ HR-NET IT-NET \]  
-  - service TCP-2222 protocol tcp port 2222  
-    - for remote admins(connecting in from outside) to ssh through port 2222   
-    - ssh \-p 2222 bigDonkBonkAdmin@203.149.210.185  
+  - service TCP-2222 removed 5 Nov: the routers map public tcp/2222 to .84:22, so the PA only sees tcp/22. Remote admins still use ssh \-p 2222 bigDonkBonkAdmin@203.149.210.185  
   - DSW1-SVI, DSW2-SVI, DSWs and UDP-67 removed 5 Nov (only the deleted PTSO-DHCP-RELAY rule used them)  
 - schedule TXN-WINDOW recurring weekly monday-friday 01:00-03:00 \[ final time given during demo \]  
 - rules  
   - set rulebase security rules \<rule name\> from \<zone\> to \<zone\> source \<address\> destination \<address\> source-user any category any application \<app-id\> service \<port\> schedule \<name\> rule-type \<interzone\> action \<allow/deny\> log-end \<yes/no\>  
   - ALLOW-OSPF from \[ outside inside \] to \[ outside inside \] application ospf, allow, log-end no  
     - allow ospf between zones so routers, firewalls and dsw can maintain ospf neighbors  
-  - INBOUND-WEB from outside to dmz, destination PUB-WEB, application \[ web-browsing ssl \], service application-default, allow  
-    - allows outside traffic to access dmz, source any to dest PUB-WEB(translated to 172.16.0.82 in dmz)  
+  - INBOUND-WEB from outside to dmz, destination WEB-SVR, application \[ web-browsing ssl \], service application-default, allow  
+    - allows outside traffic to access dmz. The router already translated .189 to 172.16.0.82, so the rule uses the real address  
     - strict filtering of application \[ web-browsing ssl \] which is HTTP and HTTPS respectively  
-  - INBOUND-DNS from outside to dmz, destination PUB-DNS, application dns, allow  
-  - JUMP-SSH-IN from outside to dmz, destination PUB-PAT, application ssh, service TCP-2222, allow  
-    - allows external admins to ssh into jump host through outside internet through port 2222 on PUB-PAT and verify that it is ssh  
+  - INBOUND-DNS from outside to dmz, destination DNS-SVR, application dns, allow  
+  - JUMP-SSH-IN from outside to dmz, destination JUMP-SVR, application ssh, service application-default, allow  
+    - allows external admins to ssh into the jump host. The router maps public tcp/2222 to .84:22, the PA checks that it really is ssh  
   - INTERNAL-TO-DNS from inside to dmz, source INTERNET-USERS, destination DNS-SVR, application dns, allow  
   - INTERNAL-TO-WEB from inside to dmz, source INTERNET-USERS, destination WEB-SVR, application \[ web-browsing ssl \], allow  
   - IT-TO-JUMP-SSH from inside to dmz, source IT-NET, destination \[ JUMP-SVR JUMP2-SVR \], application ssh, allow  
@@ -979,16 +1003,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
     - lets the DNS server recurse for HR/IT through its forwarders  
   - DENY-ALL rule-type interzone from any to any, deny, log-end yes  
     - default deny all at the end  
-- NAT  
-  - NAT-OUTBOUND from \[ inside dmz \] to outside, source \[ HR-NET IT-NET TXN-SVR JUMP-SVR JUMP2-SVR DNS-SVR \], source-translation dynamic-ip-and-port PUB-PAT  
-    - the only outbound NAT in the network (the ASA and R1 don't NAT)  
-  - NAT-WEB from outside to outside, destination PUB-WEB, service service-http, destination-translation WEB-SVR  
-    - from outside to outside: when a packet from outside arrives for 203.149.210.189(web server), since .189 belongs to the outside zone(vlan 10), the firewall routing points to the outside. this is to allow the nat rule to match  
-    - once matched, .189 is translated to WEB-SVR(172.16.0.82) and routing table by ospf takes over  
-  - NAT-WEB-HTTPS, same as NAT-WEB with service service-https  
-  - NAT-DNS from outside to outside, destination PUB-DNS, service any, destination-translation DNS-SVR  
-  - NAT-JUMP-SSH from outside to outside, destination PUB-PAT, service TCP-2222, destination-translation JUMP-SVR port 22  
-    - we can change this to a dedicated public ip for ssh instead for more security.  
+- NAT: none on the PA (5 Nov). The routers do it: R1 for 203.149.210.184/29, R2 for 129.126.142.184/29. The PA sees real inside and outside addresses in both directions, so its rules use the real server objects. pa440\_cleanup.ttl deletes the old NAT-OUTBOUND, NAT-WEB, NAT-WEB-HTTPS, NAT-DNS and NAT-JUMP-SSH rules.  
 - AAA  
   - set shared server-profile tacplus TACACS server JUMP address 172.16.0.44 secret bigBoy@ServerPassword1  
   - set shared server-profile tacplus TACACS server JUMP2 address 172.16.0.45 secret bigBoy@ServerPassword2  
@@ -997,7 +1012,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - set shared log-settings syslog SYSLOG-JUMP server JUMP server 172.16.0.44 transport UDP port 514 format BSD facility LOG\_USER   
   - set shared log-settings syslog SYSLOG-JUMP server JUMP2 server 172.16.0.45 transport UDP port 514 format BSD facility LOG\_USER  
 - rebuild: run pa440\_cleanup.ttl first, then pa440.ttl (set commands are additive)  
-- live differences (see HANDOVER.md section 6): HR-IT-INTERNET is still any/any live, and the temporary TEMP-SVR-UPDATES / TEMP-SVR-NAT install rules are still present  
+- live differences (see HANDOVER.md section 6): HR-IT-INTERNET is still any/any live, and the temporary TEMP-SVR-UPDATES / TEMP-SVR-NAT install rules are still present (after the 5 Nov NAT change, TEMP-SVR-NAT is replaced by router NAT-SOURCES lines: HANDOVER.md 8.4)  
 - PTSO  
   - Shifted ethernet1/1 to ethernet1/5: Avoids the ZTP WAN port eth1/1 completely; vlan.10 (172.16.0.92/29, metric 10\) bridges ethernet1/5 (to R1 G0/0/1) and ethernet1/2 (to R2 G0/0/1)  
   - PTSO ASA bypass (5 Nov): eth1/6 (172.16.0.117/30 to DSW1 G1/0/12) and eth1/7 (172.16.0.121/30 to DSW2 G1/0/12), routed, zone inside, OSPF metric 500. Both up. Used automatically if the ASA is unreachable from both DSWs; the PA then filters users with the same inside-zone rules. Internal servers are unreachable during an ASA failure (by design).  
