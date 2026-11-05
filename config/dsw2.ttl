@@ -76,14 +76,6 @@ sendln 'vlan 67'
 wait '#'
 sendln 'name IT'
 wait '#'
-sendln 'vlan 69'
-wait '#'
-sendln 'name INTERNAL_SERVERS_L2'
-wait '#'
-sendln 'vlan 92'
-wait '#'
-sendln 'name DMZ_SERVERS_L2'
-wait '#'
 sendln 'vlan 99'
 wait '#'
 sendln 'name MGMT_OOB'
@@ -105,9 +97,9 @@ wait '#'
 
 sendln 'spanning-tree mode rapid-pvst'
 wait '#'
-sendln 'spanning-tree vlan 23,46,69,99,100 root secondary'
+sendln 'spanning-tree vlan 23,46,99,100 root secondary'
 wait '#'
-sendln 'spanning-tree vlan 61,67,92 root primary'
+sendln 'spanning-tree vlan 61,67 root primary'
 wait '#'
 
 ; 5. Object Tracking: this DSW's own path to the ASA (5 Nov redesign)
@@ -256,7 +248,7 @@ sendln 'switchport mode trunk'
 wait '#'
 sendln 'switchport trunk native vlan 821'
 wait '#'
-sendln 'switchport trunk allowed vlan 23,46,61,67,69,92,99,100'
+sendln 'switchport trunk allowed vlan 23,46,61,67,99,100'
 wait '#'
 sendln 'switchport nonegotiate'
 wait '#'
@@ -307,28 +299,15 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 8. DMZ Servers VLAN 92 L2 Bridge (G1/0/13: Supermicro eno5, G1/0/14: PA eth1/4)
-sendln 'interface range GigabitEthernet1/0/13 - 14'
-wait '#'
-sendln 'description L2_Bridge_VLAN92_Supermicro_PA'
-wait '#'
-sendln 'switchport mode access'
-wait '#'
-sendln 'switchport access vlan 92'
-wait '#'
-sendln 'switchport nonegotiate'
-wait '#'
-sendln 'spanning-tree portfast'
-wait '#'
-sendln 'no shutdown'
-wait '#'
-sendln 'exit'
-wait '#'
+; 8. (Removed 5 Nov) DMZ servers no longer pass through DSW2.
+; Each server zone has one gateway firewall and no backup, so the DSW hop
+; added nothing. Proxmox eno5 (vmbr2, VLAN 92) is cabled straight to PA eth1/4.
+; VLAN 92 no longer exists on the DSWs.
 
-; 9. Unused Ports Blackholed (G1/0/15 - 21)
-; G1/0/15 was the ASA E1/7 DMZ-backup link (VLAN 92). Removed 5 Nov: the DMZ
-; servers' only gateway is the PA (.81). Unplug the cable.
-sendln 'interface range GigabitEthernet1/0/15 - 21'
+; 9. Unused Ports Blackholed (G1/0/13 - 21)
+; G1/0/13-14 were Supermicro eno5 and PA eth1/4 (VLAN 92 bridge).
+; G1/0/15 was the ASA E1/7 DMZ-backup link. Unplug all three cables.
+sendln 'interface range GigabitEthernet1/0/13 - 21'
 wait '#'
 sendln 'description UNUSED_PORTS'
 wait '#'

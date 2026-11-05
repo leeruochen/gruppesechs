@@ -130,8 +130,8 @@ The PA originally used `.186`/`.187`. Changed to `.189`/`.190` to match `plan.md
 - Tera Term: the PA macro waits on `[edit]`, not `#`, to avoid command collisions.
 
 ### Things a macro can't restore
-1. **Po5 cabling**: DSW1 Gi1/0/9-10 <-> DSW2 Gi1/0/9-10. It carries the user VLANs (HSRP hellos), VLAN 69/92 and the DSW1-DSW2 transit (VLAN 100). Since 5 Nov each DSW has its own ASA link, so Po5 is no longer in the HR/IT path, but it's still needed.
-2. **Cabling after the 5 Nov redesign:** ASA E1/4 <-> DSW2 Gi1/0/11 must be connected. Unplug PA eth1/8 <-> DSW1 Gi1/0/15 and ASA E1/7 <-> DSW2 Gi1/0/15 (no longer used). PA eth1/6/7 stay **up** now; they're routed `/30`s, so they can't loop.
+1. **Po5 cabling**: DSW1 Gi1/0/9-10 <-> DSW2 Gi1/0/9-10. It carries the user VLANs (HSRP hellos) and the DSW1-DSW2 transit (VLAN 100). Since 5 Nov each DSW has its own ASA link, so Po5 is no longer in the HR/IT path, but it's still needed.
+2. **Cabling after the 5 Nov redesign:** ASA E1/4 <-> DSW2 Gi1/0/11 must be connected. Proxmox eno2 (LAN 2) must go **straight into ASA E1/6**, and eno5 (LAN 3) **straight into PA eth1/4** (no DSW in between). DSW Gi1/0/13-15 on both switches are unused: unplug them, including PA eth1/8 and ASA E1/7. PA eth1/6/7 stay **up** now; they're routed `/30`s, so they can't loop.
 3. **R1 default must be `.94`**, never `.93` (R1's own IP).
 4. **Proxmox LAN 4 (`eno6`, bond primary) must be cabled to DSW1 Gi1/0/24.** Plugging a laptop into LAN 4 makes the bond send all OOB traffic to the laptop. Use DSW1 Gi1/0/21 (VLAN 99, `.46/28`) for a management laptop instead.
 
@@ -249,8 +249,8 @@ Full matrix, results and diagnosis steps are in `TEST-PLAN.md`. Summary (4 Nov):
 
 | Bridge | Port | Network | Host IP |
 |--------|------|---------|---------|
-| vmbr1 | eno2 (LAN 2) | Internal servers VLAN 69 | none |
-| vmbr2 | eno5 (LAN 3) | DMZ VLAN 92 | none |
+| vmbr1 | eno2 (LAN 2), direct to ASA E1/6 | Internal servers VLAN 69 | none |
+| vmbr2 | eno5 (LAN 3), direct to PA eth1/4 | DMZ VLAN 92 | none |
 | vmbr3 | bond0 = eno6 (LAN 4, primary, DSW1 Gi1/0/24) + eno1 (LAN 1, backup, DSW2 Gi1/0/24), active-backup | OOB VLAN 99 | 172.16.0.43/28, gw .33 |
 
 Proxmox GUI: `https://172.16.0.43:8006` from the OOB network, e.g. a laptop on DSW1 Gi1/0/21 with `172.16.0.46/28`, gateway `.33`. Don't use LAN 4 for a laptop (see section 4).
@@ -260,7 +260,7 @@ Proxmox GUI: `https://172.16.0.43:8006` from the OOB network, e.g. a laptop on D
 - The VM102 block has an invalid extra line `via 172.16.0.86`.
 - The backup gateways `.78` and `.86` no longer exist (removed 5 Nov), and Linux doesn't fail over between metric routes anyway. Use one gateway.
 - "Linked Clone" needs a template. Use Full Clone.
-- Its cabling description differs from `plan.md`. Either works if the VLAN joins the ports.
+- Its cabling (eno2 -> ASA eth1/6, eno5 -> PA eth1/4 directly) matches the design again since 5 Nov.
 
 ### 8.3 VM inventory and network
 
@@ -627,6 +627,23 @@ The macros describe the new design. A device rebuilt from its macro after a relo
 ### 10.1 Cabling
 - Confirm ASA E1/4 <-> DSW2 Gi1/0/11 is connected.
 - At the end, unplug PA eth1/8 <-> DSW1 Gi1/0/15 and ASA E1/7 <-> DSW2 Gi1/0/15.
+- Server recabling (each move cuts that zone for a few seconds; no firewall or VM config changes, both ends stay untagged):
+  - Unplug ASA E1/6 from DSW1 Gi1/0/14 and Proxmox eno2 from DSW1 Gi1/0/13. Connect eno2 straight to ASA E1/6.
+  - Unplug PA eth1/4 from DSW2 Gi1/0/14 and Proxmox eno5 from DSW2 Gi1/0/13. Connect eno5 straight to PA eth1/4.
+  - Then on both DSWs (10.3 / 10.4, or afterwards):
+    ```
+    interface range GigabitEthernet1/0/13 - 15
+     description UNUSED_PORTS
+     switchport mode access
+     switchport access vlan 727
+     shutdown
+    interface Port-channel5
+     switchport trunk allowed vlan 23,46,61,67,99,100
+    no spanning-tree vlan 69 root
+    no spanning-tree vlan 92 root
+    no vlan 69
+    no vlan 92
+    ```
 
 ### 10.2 PA
 Run `pa440_cleanup.ttl`, then `pa440.ttl`. The cleanup's new section 7 removes vlan.100, vlan.69, `VL-INSIDE-BYPASS`, `VL-SERVER`, zones `inside-l2` / `server` / `server-l2`, and the layer2 config on eth1/6/7/8.

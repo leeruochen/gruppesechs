@@ -172,13 +172,13 @@ IP block: 172.16.0.72/29
 Default Gateway: 172.16.0.73  
 Usable IP: 172.16.0.74 to 172.16.0.78
 
-- ASA Vlan69 SVI (`server`, on E1/6 -> DSW1 Gi1/0/14): 172.16.0.73  
+- ASA Vlan69 SVI (`server`, on E1/6, cabled directly to Proxmox eno2): 172.16.0.73  
 - VM103(File): 172.16.0.74  
 - VM104(Accounts): 172.16.0.75  
 - VM105(Txn): 172.16.0.76  
 - VM107(DHCP): 172.16.0.77  
 - .78: unused. The PA backup gateway (vlan.69 on eth1/8) was removed 5 Nov. The internal servers belong to the ASA only; if the ASA fails, they are unreachable by design.  
-- Servers reach this VLAN through Proxmox eno2 (vmbr1) -> DSW1 Gi1/0/13
+- Servers reach this VLAN through Proxmox eno2 (vmbr1) -> ASA E1/6 directly (no DSW in the path since 5 Nov)
 
 Broadcast: 172.16.0.79
 
@@ -188,7 +188,7 @@ IP block: 172.16.0.80/29
 Default Gateway: 172.16.0.81  
 Usable IP: 172.16.0.82 to 172.16.0.86
 
-- PA vlan.92 (on eth1/4 -> DSW2 Gi1/0/14): 172.16.0.81  
+- PA vlan.92 (on eth1/4, cabled directly to Proxmox eno5): 172.16.0.81  
 - VM100(Web): 172.16.0.82  
   - public 203.149.210.189 (PA NAT-WEB / NAT-WEB-HTTPS)  
 - VM101(DNS): 172.16.0.83  
@@ -197,7 +197,7 @@ Usable IP: 172.16.0.82 to 172.16.0.86
   - public 203.149.210.185 tcp/2222 -> .84:22 (PA NAT-JUMP-SSH)  
 - VM106(TACACS+ 2 / Jump 2): 172.16.0.85  
 - .86: unused. The ASA backup gateway (Vlan92 on E1/7) was removed 5 Nov. The DMZ belongs to the PA only; if the PA fails, the DMZ is unreachable by design.  
-- Servers reach this VLAN through Proxmox eno5 (vmbr2) -> DSW2 Gi1/0/13
+- Servers reach this VLAN through Proxmox eno5 (vmbr2) -> PA eth1/4 directly (no DSW in the path since 5 Nov)
 
 Broadcast: 172.16.0.87
 
@@ -476,7 +476,7 @@ DSW1
 - username bigDonkBonkAdmin privilege 15 algorithm-type scrypt secret Venison2Beef  
 - vrf definition OOB, address-family ipv4  
 - G0/0 (rear management port) shut down  
-- vlan 23 STAFF, 46 ATM, 61 HR, 67 IT, 69 INTERNAL\_SERVERS\_L2, 92 DMZ\_SERVERS\_L2, 99 MGMT\_OOB, 100 DSW\_TRANSIT, 727 UNUSED\_BLACKHOLE, 821 NATIVE\_TRUNK  
+- vlan 23 STAFF, 46 ATM, 61 HR, 67 IT, 99 MGMT\_OOB, 100 DSW\_TRANSIT, 727 UNUSED\_BLACKHOLE, 821 NATIVE\_TRUNK  
 - ip sla 10 (icmp-echo 172.16.0.97 source-interface Gi1/0/11, frequency 5), track 10 ip sla 10 reachability  
   - checks this DSW's own link to the ASA. Used by HSRP and by the default route.  
 - int vlan 23, 46, 61, 67  
@@ -492,23 +492,22 @@ DSW1
   - ip add 172.16.0.125 255.255.255.252, ip ospf cost 10, ip flow monitor bank-flow-monitor input  
 - hsrp standby 23, 46 with priority 110, and preempt (Active)  
 - hsrp standby 61,67 with priority 90, and preempt (Standby)  
-- STP rapid-pvst: vlan 23, 46, 69, 99, 100 root primary  
-- STP vlan 61, 67, 92 root secondary  
+- STP rapid-pvst: vlan 23, 46, 99, 100 root primary  
+- STP vlan 61, 67 root secondary  
 - Etherchannels (LACP active)  
   - int g1/0/1-2 Po1 (towards SW1), allows 23, 99  
   - int g1/0/3-4 Po2 (towards SW2), allows 46, 99  
   - int g1/0/5-6 Po3 (towards SW3), allows 61, 99  
   - int g1/0/7-8 Po4 (towards SW4), allows 67, 99  
-  - int g1/0/9-10 Po5 (towards DSW2), allows 23, 46, 61, 67, 69, 92, 99, 100  
+  - int g1/0/9-10 Po5 (towards DSW2), allows 23, 46, 61, 67, 99, 100  
   - trunk  
   - switchport nonegotiate  
   - native vlan change 821  
   - spanning-tree guard root on Po1-Po4 (not Po5)  
 - g1/0/11 routed (no switchport) to ASA E1/3: 172.16.0.98/30, ip ospf cost 10  
 - g1/0/12 routed (no switchport) to PA eth1/6: 172.16.0.118/30, ip ospf cost 500 (ASA bypass)  
-- g1/0/13-14, access vlan 69: g1/0/13 Supermicro eno2 (vmbr1), g1/0/14 ASA E1/6  
 - g1/0/22-24, access vlan 99, portfast + bpduguard: g1/0/22 R1 G0/1/0, g1/0/23 PA MGT, g1/0/24 Supermicro eno6 (bond0 primary)  
-- unused ports g1/0/15-21 are put in 727 and shutdown (g1/0/15 was the PA eth1/8 server backup, removed 5 Nov)  
+- unused ports g1/0/13-21 are put in 727 and shutdown (g1/0/13-14 were the VLAN 69 server bridge, g1/0/15 the PA eth1/8 server backup; all removed 5 Nov)  
   - live only (not in macro yet): g1/0/21 is access vlan 99 for a management laptop (172.16.0.46/28, gw .33)  
 - OSPF  
   - router-id 3.3.3.3, auto-cost reference-bandwidth 10000, passive-interface default, no passive-interface Vlan100 / Gi1/0/11 / Gi1/0/12  
@@ -524,14 +523,13 @@ DSW2
 - int vlan 23 .3, vlan 46 .51, vlan 61 .59, vlan 67 .67, vlan 99 .36, vlan 100 .126  
 - hsrp standby 23, 46 with priority 90, and preempt (Standby); ip ospf cost 20 on these SVIs  
 - hsrp standby 61,67 with priority 110, and preempt (Active); ip ospf cost 10 on these SVIs  
-- STP vlan 61, 67, 92 root primary; vlan 23, 46, 69, 99, 100 root secondary  
+- STP vlan 61, 67 root primary; vlan 23, 46, 99, 100 root secondary  
 - Po5 (g1/0/9-10) towards DSW1  
 - ip sla 10 pings the ASA at 172.16.0.101 from Gi1/0/11  
 - g1/0/11 routed to ASA E1/4: 172.16.0.102/30, ip ospf cost 10  
 - g1/0/12 routed to PA eth1/7: 172.16.0.122/30, ip ospf cost 500 (ASA bypass)  
-- g1/0/13-14, access vlan 92: g1/0/13 Supermicro eno5 (vmbr2), g1/0/14 PA eth1/4  
 - g1/0/22-24, access vlan 99: g1/0/22 R2 G0/1/0, g1/0/23 ASA Management1/1, g1/0/24 Supermicro eno1 (bond0 backup)  
-- unused ports g1/0/15-21 are put in 727 and shutdown (g1/0/15 was the ASA E1/7 DMZ backup, removed 5 Nov)  
+- unused ports g1/0/13-21 are put in 727 and shutdown (g1/0/13-14 were the VLAN 92 DMZ bridge, g1/0/15 the ASA E1/7 DMZ backup; all removed 5 Nov)  
 - OSPF router-id 4.4.4.4, area 0 networks as DSW1 but .100/30 (ASA), .120/30 (PA), .124/30 (DSW1)  
 - ip route 0.0.0.0 0.0.0.0 172.16.0.101 track 10  
 - DSW2 now has its own ASA link (E1/4), so Po5 is no longer in the HR/IT path. It is only used if one DSW loses its ASA link.
@@ -588,13 +586,10 @@ both DSW
 - syslog  
   - logging host 172.16.0.44 vrf OOB, logging host 172.16.0.45 vrf OOB, logging trap informational  
 - PTSO  
-  - added vlan 69 and vlan 92 as server bridging so access towards internal servers and dmz goes through both dsws.  
-    - allow vlan 69, 92, 100 across po5 for inter dsw communication  
+  - Server zones don't pass through the DSWs (5 Nov). Proxmox eno2 (vmbr1, VLAN 69) plugs straight into ASA E1/6 and eno5 (vmbr2, VLAN 92) straight into PA eth1/4. Each zone has one gateway and no backup, so a switch in between added nothing. VLANs 69 and 92 don't exist on the DSWs.  
+    - Po5 allows 23, 46, 61, 67, 99, 100  
   - Firewall links (5 Nov): each DSW has its own routed /30 to the ASA (G1/0/11, cost 10) and to the PA (G1/0/12, cost 500). VLAN 100 is only the DSW1 <-> DSW2 transit over Po5.  
     - track 10 (ip sla to this DSW's ASA address) lowers HSRP priority by 30 and withdraws the static default when this DSW loses its ASA link, so the other DSW takes over the user VLANs.  
-  - Server Bridge Ports (G1/0/13 \- 14):  
-    - On DSW1 (vlan 69): G1/0/13 $\rightarrow$ Supermicro eno2 (vmbr1), G1/0/14 $\rightarrow$ ASA E1/6 (.73 gateway).  
-    - On DSW2 (vlan 92): G1/0/13 $\rightarrow$ Supermicro eno5 (vmbr2), G1/0/14 $\rightarrow$ PA-440 eth1/4 (.81 gateway).  
   - Both firewalls must see both directions of every connection. A backup link is safe when it is its own transit subnet (OSPF cost decides); it is unsafe when it puts a second firewall in a server subnet (connected route beats OSPF). So the server-subnet backups (PA .78, ASA .86) were removed, and the transit backups (PA eth1/6/7, ASA E1/4, ASA <-> R2) stay up and fail over automatically.
 
 ## **Routers**
@@ -792,7 +787,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - its own /30, so it doesn't clash with e1/3. Same INSIDE\_IN ACL and standby PAT as inside.  
 - int e1/5, e1/7 and e1/8, unused, shutdown  
   - e1/7 used to carry the DMZ backup (Vlan92 dmz .86). Removed 5 Nov: the DMZ belongs to the PA only.  
-- int e1/6, connect to DSW1 g1/0/14  
+- int e1/6, connect directly to Proxmox eno2 (vmbr1)  
   - switchport access vlan 69  
 - int vlan 69  
   - nameif server, security-level 60  
@@ -886,7 +881,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - .44/.45 run chrony (VM102/VM106), which syncs from the internet pool through the PA  
 - PTSO  
   - Ethernet1/2 (wan-backup, security-level 0): Connected to R2 G0/0/0 (172.16.0.114/30, ospf cost 500\)  
-  - Vlan69 (server, security-level 60): Internal Servers Gateway (172.16.0.73/29) on Ethernet1/6 (cabled to DSW1 G1/0/14), redistributed into OSPF  
+  - Vlan69 (server, security-level 60): Internal Servers Gateway (172.16.0.73/29) on Ethernet1/6 (cabled directly to Proxmox eno2), redistributed into OSPF  
   - Ethernet1/3 (inside) and Ethernet1/4 (inside2): one routed /30 to each DSW, both active  
   - Standby PAT (bound strictly to wan-backup): dynamic PAT (after-auto, from inside, inside2 and server) for PAT-USERS to .185, used only when traffic exits wan-backup during a PA-440 failure  
   - No DMZ interface (removed 5 Nov). If the PA fails, users and internal servers keep internet via wan-backup; the DMZ is down by design.
@@ -915,7 +910,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - eth1/2: layer2, lldp enable no, towards R2 g0/0/1  
   - eth1/3: layer3 ip 172.16.0.105/30, towards ASA e1/1  
     - runs layer 3 for routing and it only connects 1 cable towards asa  
-  - eth1/4: layer2, lldp enable no, towards DSW2 g1/0/14 (DMZ VLAN 92)  
+  - eth1/4: layer2, lldp enable no, cabled directly to Proxmox eno5 (vmbr2, DMZ VLAN 92)  
   - eth1/5: layer2, lldp enable no, towards R1 g0/0/1  
     - disable lldp on untrusted outside ports, prevent recon  
   - eth1/6: layer3 ip 172.16.0.117/30, towards DSW1 g1/0/12 (ASA bypass, up)  

@@ -53,10 +53,10 @@ Server gateways (Layer 2, one firewall per server zone):
 
 | # | End A | End B | VLAN | Subnet | IPs | State |
 |---|---|---|---|---|---|---|
-| 11 | ASA E1/6 (switchport) | DSW1 Gi1/0/14 | 69 | 172.16.0.72/29 | ASA SVI Vlan69 `server` .73 | up |
-| 13 | PA eth1/4 | DSW2 Gi1/0/14 | 92 | 172.16.0.80/29 | PA vlan.92 .81 | up |
+| 11 | ASA E1/6 (switchport) | Proxmox eno2 (vmbr1), direct | 69 | 172.16.0.72/29 | ASA SVI Vlan69 `server` .73 | up |
+| 13 | PA eth1/4 (layer2) | Proxmox eno5 (vmbr2), direct | 92 | 172.16.0.80/29 | PA vlan.92 .81 | up |
 
-Removed 5 Nov (unplug, don't draw): #12 PA eth1/8 <-> DSW1 Gi1/0/15 (old PA `.78` in VLAN 69) and #14 ASA E1/7 <-> DSW2 Gi1/0/15 (old ASA `.86` in VLAN 92). Those ports are now unused and shut.
+Removed 5 Nov (unplug, don't draw): #12 PA eth1/8 <-> DSW1 Gi1/0/15 (old PA `.78` in VLAN 69) and #14 ASA E1/7 <-> DSW2 Gi1/0/15 (old ASA `.86` in VLAN 92). Also removed: the DSW server bridges (DSW1 Gi1/0/13-14 for VLAN 69, DSW2 Gi1/0/13-14 for VLAN 92). Proxmox now plugs straight into the firewalls, and VLANs 69/92 no longer exist on the DSWs or Po5. DSW Gi1/0/13-15 are unused and shut.
 
 ### Distribution and access switches
 
@@ -64,7 +64,7 @@ All trunks: LACP active, native VLAN 821, nonegotiate.
 
 | # | End A | End B | Port-channel | Allowed VLANs |
 |---|---|---|---|---|
-| 15 | DSW1 Gi1/0/9-10 | DSW2 Gi1/0/9-10 | Po5 | 23, 46, 61, 67, 69, 92, 99, 100 (VLAN 100 = DSW1 .125 <-> DSW2 .126 routed transit, 172.16.0.124/30) |
+| 15 | DSW1 Gi1/0/9-10 | DSW2 Gi1/0/9-10 | Po5 | 23, 46, 61, 67, 99, 100 (VLAN 100 = DSW1 .125 <-> DSW2 .126 routed transit, 172.16.0.124/30) |
 | 16 | DSW1 Gi1/0/1-2 | SW1 Gi1/0/1-2 | Po1 (both ends) | 23, 99 |
 | 17 | DSW2 Gi1/0/1-2 | SW1 Gi1/0/3-4 | Po1 on DSW2 / Po2 on SW1 | 23, 99 |
 | 18 | DSW1 Gi1/0/3-4 | SW2 Gi1/0/1-2 | Po2 / Po1 | 46, 99 |
@@ -78,8 +78,8 @@ All trunks: LACP active, native VLAN 821, nonegotiate.
 
 | # | Proxmox port | Bridge | Switch port | VLAN |
 |---|---|---|---|---|
-| 24 | eno2 (LAN 2) | vmbr1 | DSW1 Gi1/0/13 | 69 internal servers |
-| 25 | eno5 (LAN 3) | vmbr2 | DSW2 Gi1/0/13 | 92 DMZ |
+| 24 | eno2 (LAN 2) | vmbr1 | ASA E1/6 (direct) | 69 internal servers |
+| 25 | eno5 (LAN 3) | vmbr2 | PA eth1/4 (direct) | 92 DMZ |
 | 26 | eno6 (LAN 4), bond0 primary | vmbr3 | DSW1 Gi1/0/24 | 99 OOB |
 | 27 | eno1 (LAN 1), bond0 backup | vmbr3 | DSW2 Gi1/0/24 | 99 OOB |
 
@@ -104,7 +104,7 @@ Access switches and DSWs carry VLAN 99 in-band over the port-channels (no G0/0 c
 | SW3 | Gi1/0/5-6 | 61 HR | max 2 MAC |
 | SW4 | Gi1/0/5-7 | 67 IT | max 2 MAC |
 
-Unused ports go to VLAN 727 (blackhole): SW1 Gi1/0/17-24, SW2/SW4 Gi1/0/8-24, SW3 Gi1/0/7-24, DSW1/DSW2 Gi1/0/15-21 (except DSW1 Gi1/0/21 live). Unused firewall ports: PA eth1/1, eth1/8, ASA E1/5, E1/7, E1/8.
+Unused ports go to VLAN 727 (blackhole): SW1 Gi1/0/17-24, SW2/SW4 Gi1/0/8-24, SW3 Gi1/0/7-24, DSW1/DSW2 Gi1/0/13-21 (except DSW1 Gi1/0/21 live). Unused firewall ports: PA eth1/1, eth1/8, ASA E1/5, E1/7, E1/8.
 
 ## 3. Addressing table (by subnet)
 
@@ -184,7 +184,6 @@ User -> SW1-4 -> HSRP Active DSW (DSW1 for Staff/ATM, DSW2 for HR/IT) -> that DS
 
 | Topic | Says | Actual (macros / live) |
 |---|---|---|
-| Server cabling | `supermicro setup.md`: eno2 -> ASA eth1/6, eno5 -> PA eth1/4 directly | eno2 -> DSW1 Gi1/0/13, eno5 -> DSW2 Gi1/0/13, firewalls hang off the DSWs |
 | DSW1 Gi1/0/21 | `dsw1.ttl`: unused (VLAN 727, shut) | live: VLAN 99 mgmt laptop port |
 
 Port numbers come from the macro interface descriptions. Confirm against the real cabling with `show cdp neighbors` (Cisco) and `show lldp neighbors all` (PA) before finalising a diagram.

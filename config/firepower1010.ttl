@@ -205,10 +205,13 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 5. Server & DMZ Switchports and SVIs
+; 5. Internal Servers Switchport and SVI
+; E1/6 is cabled DIRECTLY to Proxmox eno2 (vmbr1) since 5 Nov, not via DSW1.
+; The servers have one gateway (.73) and no backup, so a switch in between
+; added nothing. Untagged access VLAN 69 on both ends; the SVI is unchanged.
 sendln 'interface Ethernet1/6'
 wait '#'
-sendln 'description Link_to_DSW1_G1_0_14_VLAN69_Bridge'
+sendln 'description Direct_to_Supermicro_eno2_vmbr1_VLAN69'
 wait '#'
 sendln 'switchport mode access'
 wait '#'

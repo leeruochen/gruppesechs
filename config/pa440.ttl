@@ -115,6 +115,9 @@ sendln 'set network interface ethernet ethernet1/3 layer3 interface-management-p
 wait '[edit]'
 
 ; Layer 2 Switched Ports (R1/R2 transit VLAN and DMZ)
+; eth1/4 is cabled DIRECTLY to Proxmox eno5 (vmbr2) since 5 Nov, not via DSW2.
+; The DMZ has one gateway (vlan.92 .81) and no backup, so a switch in between
+; added nothing. Untagged, so the VL-DMZ / vlan.92 config below is unchanged.
 sendln 'set network interface ethernet ethernet1/2 layer2 lldp enable no'
 wait '[edit]'
 sendln 'set network interface ethernet ethernet1/4 layer2 lldp enable no'
