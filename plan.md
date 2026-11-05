@@ -177,7 +177,7 @@ Usable IP: 172.16.0.74 to 172.16.0.78
 - VM104(Accounts): 172.16.0.75  
 - VM105(Txn): 172.16.0.76  
 - VM107(DHCP): 172.16.0.77  
-- PA vlan.69 (eth1/8 -> DSW1 Gi1/0/15): 172.16.0.78, backup only. eth1/8 is admin-down and vlan.69 is removed from the PA virtual router and OSPF. Servers use .73 only.  
+- .78: unused. The PA backup gateway (vlan.69 on eth1/8) was removed 5 Nov. The internal servers belong to the ASA only; if the ASA fails, they are unreachable by design.  
 - Servers reach this VLAN through Proxmox eno2 (vmbr1) -> DSW1 Gi1/0/13
 
 Broadcast: 172.16.0.79
@@ -196,7 +196,7 @@ Usable IP: 172.16.0.82 to 172.16.0.86
 - VM102(TACACS+ 1 / Jump 1): 172.16.0.84  
   - public 203.149.210.185 tcp/2222 -> .84:22 (PA NAT-JUMP-SSH)  
 - VM106(TACACS+ 2 / Jump 2): 172.16.0.85  
-- ASA Vlan92 SVI (`dmz`, on E1/7 -> DSW2 Gi1/0/15): 172.16.0.86, backup only, kept shut down (manual failover)  
+- .86: unused. The ASA backup gateway (Vlan92 on E1/7) was removed 5 Nov. The DMZ belongs to the PA only; if the PA fails, the DMZ is unreachable by design.  
 - Servers reach this VLAN through Proxmox eno5 (vmbr2) -> DSW2 Gi1/0/13
 
 Broadcast: 172.16.0.87
@@ -214,19 +214,26 @@ Usable IP: 172.16.0.89 to 172.16.0.94
 
 Broadcast: 172.16.0.95
 
-## **Inside transit VLAN 100 (ASA to Distribution Switches)** 
+## **ASA to Distribution Switches (routed /30s, 5 Nov)**
 
-IP block: 172.16.0.96/29  
-Usable IP: 172.16.0.97 to 172.16.0.102
+The old shared VLAN 100 segment (172.16.0.96/29) was split into two point-to-point /30s, one per DSW. Two routed ports can't share a subnet, so each link gets its own. Both are active.
 
-- ASA E1/3 (routed, nameif inside): 172.16.0.97, cabled to DSW1 Gi1/0/11  
-  - ASA E1/4 (to DSW2 Gi1/0/11) is a spare, kept shut down. DSW2 reaches .97 over Po5.  
-- DSW1 int Vlan100: 172.16.0.98 (Gi1/0/11-12 are access ports in VLAN 100)  
-- DSW2 int Vlan100: 172.16.0.99 (Gi1/0/11-12 are access ports in VLAN 100)  
-- PA vlan.100 (eth1/6 -> DSW1 Gi1/0/12, eth1/7 -> DSW2 Gi1/0/12): 172.16.0.100, bypass only. eth1/6/7 are admin-down (they formed a VLAN 100 loop when up).  
-- unused: .101 .102
+- ASA E1/3 (nameif inside) <-> DSW1 Gi1/0/11 (routed): 172.16.0.96/30, ASA .97, DSW1 .98, broadcast .99  
+- ASA E1/4 (nameif inside2) <-> DSW2 Gi1/0/11 (routed): 172.16.0.100/30, ASA .101, DSW2 .102, broadcast .103  
+- OSPF cost 10 on both. `inside` and `inside2` share the INSIDE_IN ACL and the standby PAT.
 
-Broadcast: 172.16.0.103
+## **PA ASA-bypass links (routed /30s, 5 Nov)**
+
+Replaces the old PA vlan.100 (.100) bypass, which bridged eth1/6 and eth1/7 and formed a VLAN 100 loop with Po5.
+
+- PA eth1/6 <-> DSW1 Gi1/0/12: 172.16.0.116/30, PA .117, DSW1 .118, broadcast .119  
+- PA eth1/7 <-> DSW2 Gi1/0/12: 172.16.0.120/30, PA .121, DSW2 .122, broadcast .123  
+- OSPF cost 500: idle while the ASA path exists, carries user traffic only if the ASA is unreachable from both DSWs. PA zone `inside`.
+
+## **DSW1 to DSW2 transit (VLAN 100 over Po5)**
+
+- 172.16.0.124/30: DSW1 Vlan100 .125, DSW2 Vlan100 .126, broadcast .127  
+- OSPF cost 10. VLAN 100 now only exists on Po5 (no firewall ports). It lets a DSW that lost its own ASA link reach the ASA through the other DSW.
 
 ## **PA to ASA**
 
@@ -469,17 +476,20 @@ DSW1
 - username bigDonkBonkAdmin privilege 15 algorithm-type scrypt secret Venison2Beef  
 - vrf definition OOB, address-family ipv4  
 - G0/0 (rear management port) shut down  
-- vlan 23 STAFF, 46 ATM, 61 HR, 67 IT, 69 INTERNAL\_SERVERS\_L2, 92 DMZ\_SERVERS\_L2, 99 MGMT\_OOB, 100 INSIDE\_FW\_TRANSIT, 727 UNUSED\_BLACKHOLE, 821 NATIVE\_TRUNK  
-- track 1 interface Vlan100 line-protocol  
+- vlan 23 STAFF, 46 ATM, 61 HR, 67 IT, 69 INTERNAL\_SERVERS\_L2, 92 DMZ\_SERVERS\_L2, 99 MGMT\_OOB, 100 DSW\_TRANSIT, 727 UNUSED\_BLACKHOLE, 821 NATIVE\_TRUNK  
+- ip sla 10 (icmp-echo 172.16.0.97 source-interface Gi1/0/11, frequency 5), track 10 ip sla 10 reachability  
+  - checks this DSW's own link to the ASA. Used by HSRP and by the default route.  
 - int vlan 23, 46, 61, 67  
-  - standby version 2, standby \<vlan\> track 1 decrement 20, preempt  
+  - standby version 2, standby \<vlan\> track 10 decrement 30, preempt  
+    - decrement 30 (not 20): 110 - 20 = 90 ties with the peer's 90, and HSRP breaks a tie on the higher IP, so DSW2 (.59/.67) would never give up 61/67  
+  - ip ospf cost 10 on the VLANs this DSW is HSRP Active for (23, 46), 20 on the others (61, 67), so the ASA sends return traffic to the Active DSW  
   - ip helper-address 172.16.0.77  
   - ip access-group ACL\_\<VLAN\>\_IN in, ip flow monitor bank-flow-monitor input, no ip redirects, no ip proxy-arp  
 - int vlan 99  
   - ip add 172.16.0.35 255.255.255.240  
   - vrf forwarding OOB, switch from default Mgmt-vrf to OOB  
-- int vlan 100 (inside transit to ASA)  
-  - ip add 172.16.0.98 255.255.255.248, ip ospf cost 10, ip flow monitor bank-flow-monitor input  
+- int vlan 100 (DSW1 <-> DSW2 transit over Po5 only)  
+  - ip add 172.16.0.125 255.255.255.252, ip ospf cost 10, ip flow monitor bank-flow-monitor input  
 - hsrp standby 23, 46 with priority 110, and preempt (Active)  
 - hsrp standby 61,67 with priority 90, and preempt (Standby)  
 - STP rapid-pvst: vlan 23, 46, 69, 99, 100 root primary  
@@ -494,34 +504,37 @@ DSW1
   - switchport nonegotiate  
   - native vlan change 821  
   - spanning-tree guard root on Po1-Po4 (not Po5)  
-- g1/0/11-12, access vlan 100: g1/0/11 to ASA E1/3, g1/0/12 to PA eth1/6 (PA side admin-down)  
-- g1/0/13-15, access vlan 69: g1/0/13 Supermicro eno2 (vmbr1), g1/0/14 ASA E1/6, g1/0/15 PA eth1/8 (PA side admin-down)  
+- g1/0/11 routed (no switchport) to ASA E1/3: 172.16.0.98/30, ip ospf cost 10  
+- g1/0/12 routed (no switchport) to PA eth1/6: 172.16.0.118/30, ip ospf cost 500 (ASA bypass)  
+- g1/0/13-14, access vlan 69: g1/0/13 Supermicro eno2 (vmbr1), g1/0/14 ASA E1/6  
 - g1/0/22-24, access vlan 99, portfast + bpduguard: g1/0/22 R1 G0/1/0, g1/0/23 PA MGT, g1/0/24 Supermicro eno6 (bond0 primary)  
-- unused ports g1/0/16-21 are put in 727 and shutdown  
+- unused ports g1/0/15-21 are put in 727 and shutdown (g1/0/15 was the PA eth1/8 server backup, removed 5 Nov)  
   - live only (not in macro yet): g1/0/21 is access vlan 99 for a management laptop (172.16.0.46/28, gw .33)  
 - OSPF  
-  - router-id 3.3.3.3, auto-cost reference-bandwidth 10000, passive-interface default, no passive-interface Vlan100  
-  - area 0 networks: 172.16.0.0/27, .48/29, .56/29, .64/29, .96/29  
+  - router-id 3.3.3.3, auto-cost reference-bandwidth 10000, passive-interface default, no passive-interface Vlan100 / Gi1/0/11 / Gi1/0/12  
+  - area 0 networks: 172.16.0.0/27, .48/29, .56/29, .64/29, .96/30 (ASA), .116/30 (PA), .124/30 (DSW2)  
 - static routes  
   - ip route vrf OOB 0.0.0.0 0.0.0.0 172.16.0.33 (REQUIRED, VRF OOB has no routing protocol)  
-  - ip sla 10 (icmp-echo 172.16.0.97 source Vlan100, frequency 5), track 10 ip sla 10 reachability  
-  - ip route 0.0.0.0 0.0.0.0 172.16.0.97 track 10 (OPTIONAL, forces the ASA path even if the PA bypass is ever brought up)  
+  - ip route 0.0.0.0 0.0.0.0 172.16.0.97 track 10 (OPTIONAL, pins the ASA path; withdrawn if this DSW loses its ASA link)  
 - ntp server vrf OOB 172.16.0.44 prefer, 172.16.0.45
 
 DSW2
 
 - same as DSW1 except:  
-- int vlan 23 .3, vlan 46 .51, vlan 61 .59, vlan 67 .67, vlan 99 .36, vlan 100 .99  
-- hsrp standby 23, 46 with priority 90, and preempt (Standby)  
-- hsrp standby 61,67 with priority 110, and preempt (Active)  
+- int vlan 23 .3, vlan 46 .51, vlan 61 .59, vlan 67 .67, vlan 99 .36, vlan 100 .126  
+- hsrp standby 23, 46 with priority 90, and preempt (Standby); ip ospf cost 20 on these SVIs  
+- hsrp standby 61,67 with priority 110, and preempt (Active); ip ospf cost 10 on these SVIs  
 - STP vlan 61, 67, 92 root primary; vlan 23, 46, 69, 99, 100 root secondary  
 - Po5 (g1/0/9-10) towards DSW1  
-- g1/0/11-12, access vlan 100: g1/0/11 to ASA E1/4 (ASA side shut), g1/0/12 to PA eth1/7 (PA side admin-down)  
-- g1/0/13-15, access vlan 92: g1/0/13 Supermicro eno5 (vmbr2), g1/0/14 PA eth1/4, g1/0/15 ASA E1/7  
+- ip sla 10 pings the ASA at 172.16.0.101 from Gi1/0/11  
+- g1/0/11 routed to ASA E1/4: 172.16.0.102/30, ip ospf cost 10  
+- g1/0/12 routed to PA eth1/7: 172.16.0.122/30, ip ospf cost 500 (ASA bypass)  
+- g1/0/13-14, access vlan 92: g1/0/13 Supermicro eno5 (vmbr2), g1/0/14 PA eth1/4  
 - g1/0/22-24, access vlan 99: g1/0/22 R2 G0/1/0, g1/0/23 ASA Management1/1, g1/0/24 Supermicro eno1 (bond0 backup)  
-- unused ports g1/0/16-21 are put in 727 and shutdown  
-- OSPF router-id 4.4.4.4  
-- because ASA E1/4 is shut, DSW2 only reaches the ASA (.97) over Po5. If Po5 is down, HR/IT (DSW2 is their active gateway) lose the ASA.
+- unused ports g1/0/15-21 are put in 727 and shutdown (g1/0/15 was the ASA E1/7 DMZ backup, removed 5 Nov)  
+- OSPF router-id 4.4.4.4, area 0 networks as DSW1 but .100/30 (ASA), .120/30 (PA), .124/30 (DSW1)  
+- ip route 0.0.0.0 0.0.0.0 172.16.0.101 track 10  
+- DSW2 now has its own ASA link (E1/4), so Po5 is no longer in the HR/IT path. It is only used if one DSW loses its ASA link.
 
 both DSW
 
@@ -577,12 +590,12 @@ both DSW
 - PTSO  
   - added vlan 69 and vlan 92 as server bridging so access towards internal servers and dmz goes through both dsws.  
     - allow vlan 69, 92, 100 across po5 for inter dsw communication  
-  - Inside Transit SVI (interface Vlan100): 172.16.0.98/29 (DSW1) and 172.16.0.99/29 (DSW2) on interface Vlan100 spanning G1/0/11 (DSW1 to ASA E1/3; DSW2 to ASA E1/4, shut) and G1/0/12 (to PA-440 eth1/6 / eth1/7, admin-down), tracked via track 1 interface Vlan100 line-protocol.  
-    - tracking allows the device to know if the interface ever goes down which allows the device to determine which route to take.  
-  - Server Bridge Ports (G1/0/13 \- 15):  
-    - On DSW1 (vlan 69): G1/0/13 $\rightarrow$ Supermicro eno2 (vmbr1), G1/0/14 $\rightarrow$ ASA E1/6 (.73 gateway), G1/0/15 $\rightarrow$ PA-440 eth1/8 (.78 backup, admin-down).  
-    - On DSW2 (vlan 92): G1/0/13 $\rightarrow$ Supermicro eno5 (vmbr2), G1/0/14 $\rightarrow$ PA-440 eth1/4 (.81 gateway), G1/0/15 $\rightarrow$ ASA E1/7 (.86 backup, SVI shut).  
-  - Both firewalls must see both directions of every connection, so every backup interface that would give a device a second directly connected path is shut. Failover is manual.
+  - Firewall links (5 Nov): each DSW has its own routed /30 to the ASA (G1/0/11, cost 10) and to the PA (G1/0/12, cost 500). VLAN 100 is only the DSW1 <-> DSW2 transit over Po5.  
+    - track 10 (ip sla to this DSW's ASA address) lowers HSRP priority by 30 and withdraws the static default when this DSW loses its ASA link, so the other DSW takes over the user VLANs.  
+  - Server Bridge Ports (G1/0/13 \- 14):  
+    - On DSW1 (vlan 69): G1/0/13 $\rightarrow$ Supermicro eno2 (vmbr1), G1/0/14 $\rightarrow$ ASA E1/6 (.73 gateway).  
+    - On DSW2 (vlan 92): G1/0/13 $\rightarrow$ Supermicro eno5 (vmbr2), G1/0/14 $\rightarrow$ PA-440 eth1/4 (.81 gateway).  
+  - Both firewalls must see both directions of every connection. A backup link is safe when it is its own transit subnet (OSPF cost decides); it is unsafe when it puts a second firewall in a server subnet (connected route beats OSPF). So the server-subnet backups (PA .78, ASA .86) were removed, and the transit backups (PA eth1/6/7, ASA E1/4, ASA <-> R2) stay up and fail over automatically.
 
 ## **Routers**
 
@@ -771,22 +784,19 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - ip add 172.16.0.114 255.255.255.252, speed 1000, duplex full, ospf cost 500  
 - int e1/3, connect to DSW1 g1/0/11 (routed)  
   - nameif inside, security-level 100  
-  - ip add 172.16.0.97 255.255.255.248, speed 1000, duplex full, ospf cost 10  
-  - this is the inside transit to DSW1/DSW2 (both DSW Vlan100 SVIs are in this subnet; DSW2 reaches it over Po5)  
-- int e1/4, spare link to DSW2 g1/0/11  
-  - no switchport, no nameif, no ip, shutdown (avoids two ASA ports in the same VLAN 100)  
-- int e1/5 and e1/8, unused, shutdown  
+  - ip add 172.16.0.97 255.255.255.252, speed 1000, duplex full, ospf cost 10  
+  - point-to-point link to DSW1 only (172.16.0.96/30)  
+- int e1/4, connect to DSW2 g1/0/11 (routed, added 5 Nov)  
+  - nameif inside2, security-level 100  
+  - ip add 172.16.0.101 255.255.255.252, speed 1000, duplex full, ospf cost 10  
+  - its own /30, so it doesn't clash with e1/3. Same INSIDE\_IN ACL and standby PAT as inside.  
+- int e1/5, e1/7 and e1/8, unused, shutdown  
+  - e1/7 used to carry the DMZ backup (Vlan92 dmz .86). Removed 5 Nov: the DMZ belongs to the PA only.  
 - int e1/6, connect to DSW1 g1/0/14  
   - switchport access vlan 69  
 - int vlan 69  
   - nameif server, security-level 60  
   - ip add 172.16.0.73 255.255.255.248  
-- int e1/7, connect to DSW2 g1/0/15  
-  - switchport access vlan 92  
-- int vlan 92  
-  - nameif dmz, security-level 50  
-  - ip add 172.16.0.86 255.255.255.248  
-  - **shutdown** in normal operation. While up, the ASA had a directly connected route to the DMZ and sent HR/IT traffic straight in, skipping the PA, so the PA dropped the replies. Manual failover only: no shutdown this and point the DMZ servers' default route at .86.  
 - int management1/1, port above console port (cabled to DSW2 g1/0/23)  
   - for oob management  
   - security-level 100, ip add 172.16.0.42 255.255.255.240, management-only, nameif management  
@@ -794,11 +804,12 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
 - ospf  
   - router ospf 1  
     - router-id 5.5.5.5  
-    - network 172.16.0.96 255.255.255.248 area 0, asa to dsw  
+    - network 172.16.0.96 255.255.255.252 area 0, asa to dsw1  
+    - network 172.16.0.100 255.255.255.252 area 0, asa to dsw2  
     - network 172.16.0.104 255.255.255.252 area 0, asa to pa  
     - network 172.16.0.112 255.255.255.252 area 0, asa to r2  
     - redistribute connected subnets  
-      - OSPF is not run on the server/dmz SVIs. On the Firepower 1010, OSPF on switchport-backed SVIs throws `ip_multicast_ctl failed to get channel` errors. 172.16.0.72/29 (and .80/29 when Vlan92 is up) are advertised as external routes instead.  
+      - OSPF is not run on the server SVI. On the Firepower 1010, OSPF on switchport-backed SVIs throws `ip_multicast_ctl failed to get channel` errors. 172.16.0.72/29 is advertised as an external route instead.  
     - log-adj-changes  
   - the data-plane default route (via PA .105) is learned from OSPF  
 - object creation for ACL  
@@ -814,8 +825,8 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - object network PUB-PAT host 203.149.210.185  
   - object-group network STAFF-ATM (STAFF, ATM)  
   - object-group network HR-IT (HR, IT)  
-  - object-group network DSWs (172.16.0.98, .99)  
-  - object-group network DSW-SVIS (every DSW address that can source a DHCP relay: .2 .3 .50 .51 .58 .59 .66 .67 .98 .99)  
+  - object-group network DSWs (172.16.0.98, .102)  
+  - object-group network DSW-SVIS (every DSW address that can source a DHCP relay: .2 .3 .50 .51 .58 .59 .66 .67 .98 .102)  
   - object-group network JUMP-SVRs (JUMP-SVR, JUMP2-SVR)  
   - object-group network PAT-USERS (HR, IT, TXN-SVR, JUMP-SVR, JUMP2-SVR)  
 - time-range (to be given on demo day)  
@@ -838,17 +849,13 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
     - deny any servers access to INTERNAL, ip  
     - permit txn server tcp 80/443 to any, and udp 53 to DNS-SVR, with time-range TXN-WINDOW  
     - default deny any log  
-  - DMZ\_IN, for dmz (only used when Vlan92 is up)  
-    - deny DMZ-SUBNET to INTERNAL and SERVERS  
-    - permit JUMP-SVRs udp ntp and domain to any  
-    - default deny any log  
   - OUTSIDE\_IN, PA/R2 to ASA  
     - permit ospf  
-    - permit tcp 80/443 to WEB-SVR, udp/tcp 53 to DNS-SVR, tcp 22 to JUMP-SVR  
     - default deny any log  
+    - DMZ\_IN and the OUTSIDE\_IN permits to WEB-SVR/DNS-SVR/JUMP-SVR were removed 5 Nov with the ASA's DMZ interface (they only served the standby DMZ path)  
 - access-group INSIDE\_IN in interface inside  
+- access-group INSIDE\_IN in interface inside2  
 - access-group SERVER\_IN in interface server  
-- access-group DMZ\_IN in interface dmz  
 - access-group OUTSIDE\_IN in interface outside  
 - access-group OUTSIDE\_IN in interface wan-backup  
 - MPF config  
@@ -880,9 +887,9 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
 - PTSO  
   - Ethernet1/2 (wan-backup, security-level 0): Connected to R2 G0/0/0 (172.16.0.114/30, ospf cost 500\)  
   - Vlan69 (server, security-level 60): Internal Servers Gateway (172.16.0.73/29) on Ethernet1/6 (cabled to DSW1 G1/0/14), redistributed into OSPF  
-  - Vlan92 (dmz, security-level 50): Backup DMZ Servers Gateway (172.16.0.86/29) on Ethernet1/7 (cabled to DSW2 G1/0/15), shut down  
-  - Standby NAT/PAT Rules (Bound strictly to wan-backup): Performs Static NAT for WEB-SVR (.189), DNS-SVR (.190), JUMP-SVR (.185:2222), and Dynamic PAT (after-auto, from inside, server and dmz) for PAT-USERS (HR, IT, TXN-SVR, JUMP-SVR, JUMP2-SVR) only when traffic exits wan-backup during a PA-440 failure. The "pool overlap" warning for .185 is expected.  
-  - ACLs (INSIDE\_IN, DMZ\_IN, OUTSIDE\_IN): Allow DMZ access (WEB-SVR, DNS-SVR, JUMP-SVR) whether routed via PA-440 (outside) or directly into dmz (Vlan92) during a PA-440 outage
+  - Ethernet1/3 (inside) and Ethernet1/4 (inside2): one routed /30 to each DSW, both active  
+  - Standby PAT (bound strictly to wan-backup): dynamic PAT (after-auto, from inside, inside2 and server) for PAT-USERS to .185, used only when traffic exits wan-backup during a PA-440 failure  
+  - No DMZ interface (removed 5 Nov). If the PA fails, users and internal servers keep internet via wan-backup; the DMZ is down by design.
 
 ## **PA-440**
 
@@ -901,7 +908,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
 - network profiles interface-management-profile PING-ONLY ping yes  
   - by default, palto eth1/1 to 1/8 drops traffic destined for the firewalls own ip address  
   - if r1 wants to ping 172.16.0.92 or 172.16.0.105, it will drop the ping.  
-  - applied to eth1/3, vlan.10, vlan.92, vlan.100 and vlan.69  
+  - applied to eth1/3, eth1/6, eth1/7, vlan.10 and vlan.92  
   - this profile enables the ping, probably should remove to prevent inside attacker recon?  
 - interfaces  
   - eth1/1: unused, link-state down (avoids the ZTP WAN port)  
@@ -911,37 +918,33 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - eth1/4: layer2, lldp enable no, towards DSW2 g1/0/14 (DMZ VLAN 92)  
   - eth1/5: layer2, lldp enable no, towards R1 g0/0/1  
     - disable lldp on untrusted outside ports, prevent recon  
-  - eth1/6: layer2, towards DSW1 g1/0/12, **link-state down**  
-  - eth1/7: layer2, towards DSW2 g1/0/12, **link-state down**  
-    - eth1/6/7 bridge into vlan.100. With both up, they form a Layer 2 loop on VLAN 100 (the DSWs also trunk VLAN 100 over Po5 and the PA runs no STP). Failover only.  
-  - eth1/8: layer2, towards DSW1 g1/0/15, **link-state down**  
+  - eth1/6: layer3 ip 172.16.0.117/30, towards DSW1 g1/0/12 (ASA bypass, up)  
+  - eth1/7: layer3 ip 172.16.0.121/30, towards DSW2 g1/0/12 (ASA bypass, up)  
+    - changed 5 Nov from layer2 ports bridged into vlan.100. Bridged, they formed a Layer 2 loop with Po5 (the PA runs no STP), so they had to stay down. As separate routed /30s there is nothing to loop.  
+  - eth1/8: unused, **link-state down** (was the internal-server backup, removed 5 Nov)  
 - vlan interfaces  
   - vlan.10 ip 172.16.0.92/29 (network vlan OUTSIDE interface \[ ethernet1/2 ethernet1/5 \])  
     - similar for asa’s vlan 69, this is for the transit between routers and pa  
     - we have to place them in a vlan and layer 2, as if both eth1/5 and eth1/2 are given ip address in the .88/29 subnet, it will cause overlap  
   - vlan.92 ip 172.16.0.81/29 (network vlan VL-DMZ interface \[ ethernet1/4 \]), dmz’s gateway  
-  - vlan.100 ip 172.16.0.100/29 (network vlan VL-INSIDE-BYPASS interface \[ ethernet1/6 ethernet1/7 \]), bypass only  
-  - vlan.69 ip 172.16.0.78/29 (network vlan VL-SERVER interface \[ ethernet1/8 \]), backup only, not in the virtual router  
+  - vlan.100 and vlan.69 removed 5 Nov (pa440\_cleanup.ttl deletes them on a live box)  
 - set zone  
   - outside network layer3 vlan.10, towards routers  
   - outside-l2 network layer2 \[ eth1/2 eth1/5 \]  
     - outside requires layer 2 and 3 because eth1/5 and eth1/2 are layer 2 interfaces, so we put in a dedicated outside-l2 zone so layer 2 frames are inspected between routers and pa. vlan.10 also holds a layer 3 ip address so we need a layer 3 zone as well so traffic can be inspected and routed.  
-  - inside network layer3 \[ eth1/3 vlan.100 \], towards asa (and the bypass)  
-  - inside-l2 network layer2 \[ eth1/6 eth1/7 \]  
+  - inside network layer3 \[ eth1/3 eth1/6 eth1/7 \], towards asa and the two DSW bypass links  
   - dmz network layer3 vlan.92, towards supermicro  
   - dmz-l2 network layer2 eth1/4  
-  - server network layer3 vlan.69  
-  - server-l2 network layer2 eth1/8  
+  - zones inside-l2, server and server-l2 removed 5 Nov  
 - virtual router and ospf  
-  - network virtual-router default interface \[ ethernet1/3 vlan.10 vlan.92 vlan.100 \]   
-    - vlan.69 is deliberately left out. While it was in the VR, the PA treated 172.16.0.72/29 as connected and sent replies for the internal servers into the dead eth1/8. Without it, the PA learns .72/29 from the ASA via OSPF.  
+  - network virtual-router default interface \[ ethernet1/3 ethernet1/6 ethernet1/7 vlan.10 vlan.92 \]   
+    - the PA has no interface in 172.16.0.72/29; it learns it from the ASA via OSPF, so traffic to the internal servers always goes through the ASA  
   - network virtual-router default protocol ospf enable yes   
   - network virtual-router default protocol ospf router-id 6.6.6.6   
   - area 0.0.0.0 interface ethernet1/3 enable yes passive no metric 10 (to ASA)  
   - area 0.0.0.0 interface vlan.92 enable yes passive no metric 10 (DMZ)  
   - area 0.0.0.0 interface vlan.10 enable yes passive no metric 10 (to R1/R2)  
-  - area 0.0.0.0 interface vlan.100 enable yes passive no metric 500 (bypass)  
-  - vlan.69 ospf line is commented out (restore together with vlan.69 in the VR if eth1/8 is ever re-enabled)  
+  - area 0.0.0.0 interface ethernet1/6 and ethernet1/7 enable yes passive no metric 500 (ASA bypass to DSW1/DSW2)  
     - interface \<name\> enable yes, enables ospf on that interface, like ip ospf 1 area 0  
     - passive no/yes, just makes the interface not passive which will send ospf packets  
   - ospf is enabled here so that routing towards R1/R2 is achieved, and can switch in the event r1’s link fails.  
@@ -953,16 +956,15 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - address WEB-SVR .82, DNS-SVR .83, JUMP-SVR .84, JUMP2-SVR .85  
   - address PUB-PAT 203.149.210.185/32, PUB-WEB 203.149.210.189/32, PUB-DNS 203.149.210.190/32  
   - address DNS-FORWARDERS-1 8.8.8.8/32, DNS-FORWARDERS-2 1.1.1.1/32, ICT-DNS 172.18.4.32/32 (lab caching DNS, needed for other racks' names)  
-  - address DSW1-SVI 172.16.0.98/32, DSW2-SVI 172.16.0.99/32  
-  - address-group STAFF-ATM \[ STAFF ATM \], HR-IT \[ HR-NET IT-NET \], INTERNET-USERS \[ HR-NET IT-NET \], DSWs \[ DSW1-SVI DSW2-SVI \]  
+  - address-group STAFF-ATM \[ STAFF ATM \], HR-IT \[ HR-NET IT-NET \], INTERNET-USERS \[ HR-NET IT-NET \]  
   - service TCP-2222 protocol tcp port 2222  
     - for remote admins(connecting in from outside) to ssh through port 2222   
     - ssh \-p 2222 bigDonkBonkAdmin@203.149.210.185  
-  - service UDP-67 protocol udp port 67  
+  - DSW1-SVI, DSW2-SVI, DSWs and UDP-67 removed 5 Nov (only the deleted PTSO-DHCP-RELAY rule used them)  
 - schedule TXN-WINDOW recurring weekly monday-friday 01:00-03:00 \[ final time given during demo \]  
 - rules  
   - set rulebase security rules \<rule name\> from \<zone\> to \<zone\> source \<address\> destination \<address\> source-user any category any application \<app-id\> service \<port\> schedule \<name\> rule-type \<interzone\> action \<allow/deny\> log-end \<yes/no\>  
-  - ALLOW-OSPF from \[ outside inside server \] to \[ outside inside server \] application ospf, allow, log-end no  
+  - ALLOW-OSPF from \[ outside inside \] to \[ outside inside \] application ospf, allow, log-end no  
     - allow ospf between zones so routers, firewalls and dsw can maintain ospf neighbors  
   - INBOUND-WEB from outside to dmz, destination PUB-WEB, application \[ web-browsing ssl \], service application-default, allow  
     - allows outside traffic to access dmz, source any to dest PUB-WEB(translated to 172.16.0.82 in dmz)  
@@ -973,19 +975,17 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - INTERNAL-TO-DNS from inside to dmz, source INTERNET-USERS, destination DNS-SVR, application dns, allow  
   - INTERNAL-TO-WEB from inside to dmz, source INTERNET-USERS, destination WEB-SVR, application \[ web-browsing ssl \], allow  
   - IT-TO-JUMP-SSH from inside to dmz, source IT-NET, destination \[ JUMP-SVR JUMP2-SVR \], application ssh, allow  
-  - PTSO-HR-TO-FILE from inside to server, source HR-NET, destination FILE-SVR, application \[ ms-ds-smb ping \], allow  
-  - PTSO-STAFF-ATM-SVR from inside to server, source STAFF-ATM, destination \[ ACCT-SVR TXN-SVR \], application any, allow  
-  - PTSO-DHCP-RELAY from inside to server, source DSWs, destination DHCP-SVR, application dhcp, service UDP-67, allow  
-    - the three PTSO rules mean the PA enforces the same server access if the ASA goes down  
+  - PTSO-HR-TO-FILE, PTSO-STAFF-ATM-SVR and PTSO-DHCP-RELAY (inside -> server) removed 5 Nov with the PA's server interface. Internal-server access is enforced by the ASA only.  
   - HR-IT-INTERNET from inside to outside, source INTERNET-USERS, application \[ web-browsing ssl dns ping \], allow  
-  - TXN-INTERNET-TIMED from \[ inside server \] to \[ outside dmz \], source TXN-SVR, application \[ web-browsing ssl dns \], schedule TXN-WINDOW, allow  
+    - also covers users arriving over the eth1/6/7 bypass (same zone inside) when the ASA is down  
+  - TXN-INTERNET-TIMED from inside to \[ outside dmz \], source TXN-SVR, application \[ web-browsing ssl dns \], schedule TXN-WINDOW, allow  
   - DMZ-OUTBOUND-NTP from dmz to outside, source \[ JUMP-SVR JUMP2-SVR \], application \[ ntp dns \], allow  
   - DNS-SVR-FORWARD from dmz to outside, source DNS-SVR, destination \[ ICT-DNS DNS-FORWARDERS-1 DNS-FORWARDERS-2 \], application dns, allow  
     - lets the DNS server recurse for HR/IT through its forwarders  
   - DENY-ALL rule-type interzone from any to any, deny, log-end yes  
     - default deny all at the end  
 - NAT  
-  - NAT-OUTBOUND from \[ inside server dmz \] to outside, source \[ HR-NET IT-NET TXN-SVR JUMP-SVR JUMP2-SVR DNS-SVR \], source-translation dynamic-ip-and-port PUB-PAT  
+  - NAT-OUTBOUND from \[ inside dmz \] to outside, source \[ HR-NET IT-NET TXN-SVR JUMP-SVR JUMP2-SVR DNS-SVR \], source-translation dynamic-ip-and-port PUB-PAT  
     - the only outbound NAT in the network (the ASA and R1 don't NAT)  
   - NAT-WEB from outside to outside, destination PUB-WEB, service service-http, destination-translation WEB-SVR  
     - from outside to outside: when a packet from outside arrives for 203.149.210.189(web server), since .189 belongs to the outside zone(vlan 10), the firewall routing points to the outside. this is to allow the nat rule to match  
@@ -1005,9 +1005,8 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
 - live differences (see HANDOVER.md section 6): HR-IT-INTERNET is still any/any live, and the temporary TEMP-SVR-UPDATES / TEMP-SVR-NAT install rules are still present  
 - PTSO  
   - Shifted ethernet1/1 to ethernet1/5: Avoids the ZTP WAN port eth1/1 completely; vlan.10 (172.16.0.92/29, metric 10\) bridges ethernet1/5 (to R1 G0/0/1) and ethernet1/2 (to R2 G0/0/1)  
-  - PTSO Inside Bypass (vlan.100 on ethernet1/6 & ethernet1/7): Bridges eth1/6 (to DSW1 G1/0/12) and eth1/7 (to DSW2 G1/0/12) with IP 172.16.0.100/29 in zone inside (metric 500\). Ports admin-down.  
-  - PTSO Backup Internal Server Gateway (vlan.69 on ethernet1/8): Connects to DSW1 G1/0/15 (VLAN 69 L2 Bridge) with IP 172.16.0.78/29 in zone server. Port admin-down, vlan.69 out of the VR and OSPF.  
-  - Standby Internal Server Security Rules: PTSO-DHCP-RELAY, PTSO-HR-TO-FILE, and PTSO-STAFF-ATM-SVR (from inside to server) so if the ASA-1010 goes down, PA-440 enforces the same least-privilege server access rules
+  - PTSO ASA bypass (5 Nov): eth1/6 (172.16.0.117/30 to DSW1 G1/0/12) and eth1/7 (172.16.0.121/30 to DSW2 G1/0/12), routed, zone inside, OSPF metric 500. Both up. Used automatically if the ASA is unreachable from both DSWs; the PA then filters users with the same inside-zone rules. Internal servers are unreachable during an ASA failure (by design).  
+  - No internal-server interface (vlan.69/eth1/8 removed 5 Nov). The PA owns only the DMZ.
 
 ## **Users**
 

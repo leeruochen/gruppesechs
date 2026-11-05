@@ -2,6 +2,8 @@
 
 Built from `HANDOVER.md` (4 Nov) and the interface descriptions and IPs in the `.ttl` macros (5 Nov). Use this file for redrawing the topology diagram. Config detail per device is in `plan.md`.
 
+**5 Nov redesign:** the firewall links to the DSWs are now routed `/30`s (ASA E1/3 + E1/4, PA eth1/6 + eth1/7), all up. The server-subnet backups (PA `.78` on VLAN 69, ASA `.86` on VLAN 92) are removed. VLAN 100 is only the DSW1 <-> DSW2 transit over Po5. Live devices still run the old design until the macros are re-applied (`HANDOVER.md` section 10).
+
 ## 1. Devices
 
 | Device | Model / role | OSPF router-ID | OOB mgmt IP (VLAN 99) | Mgmt port |
@@ -38,16 +40,23 @@ PA eth1/2 and eth1/5 are both L2 members of PA VLAN `OUTSIDE`, so R1, R2 and the
 
 ### Firewalls to distribution switches
 
+All four firewall-to-DSW transit links are routed point-to-point `/30`s (no VLAN). Each link is its own subnet, so there is no overlap and no Layer 2 loop.
+
+| # | End A | End B | Subnet | A IP | B IP | OSPF cost | State |
+|---|---|---|---|---|---|---|---|
+| 7 | ASA E1/3 (`inside`) | DSW1 Gi1/0/11 | 172.16.0.96/30 | .97 | .98 | 10 | up |
+| 8 | ASA E1/4 (`inside2`) | DSW2 Gi1/0/11 | 172.16.0.100/30 | .101 | .102 | 10 | up |
+| 9 | PA eth1/6 | DSW1 Gi1/0/12 | 172.16.0.116/30 | .117 | .118 | 500 | up (ASA bypass, not used normally) |
+| 10 | PA eth1/7 | DSW2 Gi1/0/12 | 172.16.0.120/30 | .121 | .122 | 500 | up (ASA bypass, not used normally) |
+
+Server gateways (Layer 2, one firewall per server zone):
+
 | # | End A | End B | VLAN | Subnet | IPs | State |
 |---|---|---|---|---|---|---|
-| 7 | ASA E1/3 (`inside`, routed) | DSW1 Gi1/0/11 | 100 | 172.16.0.96/29 | ASA .97, DSW1 SVI .98, DSW2 SVI .99 | up |
-| 8 | ASA E1/4 | DSW2 Gi1/0/11 | 100 | (none) | n/a | **down** (ASA shut). DSW2 reaches .97 over Po5 |
-| 9 | PA eth1/6 | DSW1 Gi1/0/12 | 100 | 172.16.0.96/29 | PA vlan.100 .100 | **down** (link-state down) |
-| 10 | PA eth1/7 | DSW2 Gi1/0/12 | 100 | 172.16.0.96/29 | PA vlan.100 .100 | **down** (link-state down) |
 | 11 | ASA E1/6 (switchport) | DSW1 Gi1/0/14 | 69 | 172.16.0.72/29 | ASA SVI Vlan69 `server` .73 | up |
-| 12 | PA eth1/8 | DSW1 Gi1/0/15 | 69 | 172.16.0.72/29 | PA vlan.69 .78 | **down** (also removed from VR/OSPF) |
 | 13 | PA eth1/4 | DSW2 Gi1/0/14 | 92 | 172.16.0.80/29 | PA vlan.92 .81 | up |
-| 14 | ASA E1/7 (switchport) | DSW2 Gi1/0/15 | 92 | 172.16.0.80/29 | ASA SVI Vlan92 `dmz` .86 | port up, **SVI shut** |
+
+Removed 5 Nov (unplug, don't draw): #12 PA eth1/8 <-> DSW1 Gi1/0/15 (old PA `.78` in VLAN 69) and #14 ASA E1/7 <-> DSW2 Gi1/0/15 (old ASA `.86` in VLAN 92). Those ports are now unused and shut.
 
 ### Distribution and access switches
 
@@ -55,7 +64,7 @@ All trunks: LACP active, native VLAN 821, nonegotiate.
 
 | # | End A | End B | Port-channel | Allowed VLANs |
 |---|---|---|---|---|
-| 15 | DSW1 Gi1/0/9-10 | DSW2 Gi1/0/9-10 | Po5 | 23, 46, 61, 67, 69, 92, 99, 100 |
+| 15 | DSW1 Gi1/0/9-10 | DSW2 Gi1/0/9-10 | Po5 | 23, 46, 61, 67, 69, 92, 99, 100 (VLAN 100 = DSW1 .125 <-> DSW2 .126 routed transit, 172.16.0.124/30) |
 | 16 | DSW1 Gi1/0/1-2 | SW1 Gi1/0/1-2 | Po1 (both ends) | 23, 99 |
 | 17 | DSW2 Gi1/0/1-2 | SW1 Gi1/0/3-4 | Po1 on DSW2 / Po2 on SW1 | 23, 99 |
 | 18 | DSW1 Gi1/0/3-4 | SW2 Gi1/0/1-2 | Po2 / Po1 | 46, 99 |
@@ -95,7 +104,7 @@ Access switches and DSWs carry VLAN 99 in-band over the port-channels (no G0/0 c
 | SW3 | Gi1/0/5-6 | 61 HR | max 2 MAC |
 | SW4 | Gi1/0/5-7 | 67 IT | max 2 MAC |
 
-Unused ports go to VLAN 727 (blackhole): SW1 Gi1/0/17-24, SW2/SW4 Gi1/0/8-24, SW3 Gi1/0/7-24, DSW1/DSW2 Gi1/0/16-21 (except DSW1 Gi1/0/21 live). Unused firewall ports: PA eth1/1, ASA E1/5, E1/8.
+Unused ports go to VLAN 727 (blackhole): SW1 Gi1/0/17-24, SW2/SW4 Gi1/0/8-24, SW3 Gi1/0/7-24, DSW1/DSW2 Gi1/0/15-21 (except DSW1 Gi1/0/21 live). Unused firewall ports: PA eth1/1, eth1/8, ASA E1/5, E1/7, E1/8.
 
 ## 3. Addressing table (by subnet)
 
@@ -106,19 +115,23 @@ Unused ports go to VLAN 727 (blackhole): SW1 Gi1/0/17-24, SW2/SW4 Gi1/0/8-24, SW
 | ATM VLAN 46 | 172.16.0.48/29 | VIP .49 | DSW1 .50 (active), DSW2 .51; DHCP .52-.54 |
 | HR VLAN 61 | 172.16.0.56/29 | VIP .57 | DSW1 .58, DSW2 .59 (active); .60 reserved; DHCP .61-.62 |
 | IT VLAN 67 | 172.16.0.64/29 | VIP .65 | DSW1 .66, DSW2 .67 (active); DHCP .68-.70 |
-| Internal servers VLAN 69 | 172.16.0.72/29 | ASA .73 | File VM103 .74, Accounts VM104 .75, Txn VM105 .76, DHCP VM107 .77, PA .78 (down) |
-| DMZ VLAN 92 | 172.16.0.80/29 | PA .81 | Web VM100 .82, DNS VM101 .83, Jump1 VM102 .84, Jump2 VM106 .85, ASA .86 (shut) |
+| Internal servers VLAN 69 | 172.16.0.72/29 | ASA .73 | File VM103 .74, Accounts VM104 .75, Txn VM105 .76, DHCP VM107 .77 (.78 unused) |
+| DMZ VLAN 92 | 172.16.0.80/29 | PA .81 | Web VM100 .82, DNS VM101 .83, Jump1 VM102 .84, Jump2 VM106 .85 (.86 unused) |
 | Router-PA transit (PA VLAN 10) | 172.16.0.88/29 | n/a | R1 .90, R2 .91, PA .92 |
-| Inside transit VLAN 100 | 172.16.0.96/29 | ASA .97 | DSW1 .98, DSW2 .99, PA .100 (down) |
+| ASA-DSW1 | 172.16.0.96/30 | n/a | ASA E1/3 .97, DSW1 Gi1/0/11 .98 |
+| ASA-DSW2 | 172.16.0.100/30 | n/a | ASA E1/4 .101, DSW2 Gi1/0/11 .102 |
 | PA-ASA | 172.16.0.104/30 | n/a | PA eth1/3 .105, ASA E1/1 .106 |
 | R1-R2 | 172.16.0.108/30 | n/a | R1 .109, R2 .110 |
 | R2-ASA bypass | 172.16.0.112/30 | n/a | R2 .113, ASA E1/2 .114 |
+| PA-DSW1 bypass | 172.16.0.116/30 | n/a | PA eth1/6 .117, DSW1 Gi1/0/12 .118 |
+| PA-DSW2 bypass | 172.16.0.120/30 | n/a | PA eth1/7 .121, DSW2 Gi1/0/12 .122 |
+| DSW1-DSW2 transit (VLAN 100 on Po5) | 172.16.0.124/30 | n/a | DSW1 Vlan100 .125, DSW2 Vlan100 .126 |
 | WAN | 172.17.9.92/30 | ISP1 .94 | R1 .93 |
 | Public NAT block (on PA) | 203.149.210.184/29 | n/a | .185 outbound PAT + jump SSH tcp/2222 -> .84:22; .189 Web (.82, 80/443); .190 DNS (.83) |
 
 Other VLANs: 727 blackhole (unused ports), 821 native on all trunks.
 
-HSRP v2 groups use the VLAN number (23, 46, 61, 67). DSW1 priority 110 for 23/46, DSW2 priority 110 for 61/67.
+HSRP v2 groups use the VLAN number (23, 46, 61, 67). DSW1 priority 110 for 23/46, DSW2 priority 110 for 61/67. Each DSW tracks its own ASA link (`track 10`, decrement 30). Each DSW advertises its Active VLANs into OSPF at cost 10 and the others at cost 20, so the ASA returns traffic to the Active DSW.
 
 ## 4. Servers (VMs on Proxmox)
 
@@ -142,20 +155,28 @@ The jump hosts are dual-homed (OOB + DMZ). Draw them touching both networks.
 | ASA | E1/1 | outside | 0 |
 | ASA | E1/2 | wan-backup | 0 |
 | ASA | E1/3 | inside | 100 |
+| ASA | E1/4 | inside2 | 100 |
 | ASA | Vlan69 | server | 60 |
-| ASA | Vlan92 | dmz (shut) | 50 |
 | ASA | Management1/1 | management | 100 |
 | PA | vlan.10 (eth1/2, eth1/5) | outside | n/a |
-| PA | eth1/3, vlan.100 | inside | n/a |
+| PA | eth1/3, eth1/6, eth1/7 | inside | n/a |
 | PA | vlan.92 (eth1/4) | dmz | n/a |
-| PA | vlan.69 (eth1/8) | server (not in VR) | n/a |
 
 ## 6. Normal traffic path (useful as an overlay)
 
-User -> SW1-4 -> DSW1/DSW2 (HSRP) -> VLAN 100 -> ASA E1/3 .97 -> ASA E1/1 .106 -> PA eth1/3 .105 (PAT to .185) -> PA vlan.10 .92 -> R1 G0/0/1 .90 -> R1 G0/0/0 .93 -> ISP1 .94.
+User -> SW1-4 -> HSRP Active DSW (DSW1 for Staff/ATM, DSW2 for HR/IT) -> that DSW's own /30 to the ASA (E1/3 or E1/4) -> ASA E1/1 .106 -> PA eth1/3 .105 (PAT to .185) -> PA vlan.10 .92 -> R1 G0/0/1 .90 -> R1 G0/0/0 .93 -> ISP1 .94.
 
 - Internal servers use the ASA (.73) only. DMZ servers use the PA (.81) only.
-- Standby paths drawn dashed: R2 <-> ASA (/30 .112), PA eth1/6/7/8, ASA E1/4, ASA Vlan92. Failover is manual.
+- Standby paths, drawn dashed but **up**: R2 <-> ASA (.112/30), PA eth1/6 and eth1/7 (.116/30, .120/30). Po5 / VLAN 100 is only used when a DSW loses its own ASA link.
+
+### Automatic failover (no config changes)
+
+| Failure | What happens | Lost |
+|---|---|---|
+| One DSW's ASA link | That DSW's track 10 fails: HSRP moves its VLANs to the other DSW, its static default is withdrawn | Nothing |
+| ASA | Both DSWs' track 10 fail; OSPF default moves to the PA bypass (eth1/6/7, cost 500). The PA filters users with its `inside` rules | Internal servers (VLAN 69) |
+| PA | The ASA's OSPF default moves to R2 (wan-backup, cost 500); the ASA's standby PAT translates to .185. R1/R2 track 2 (ping .92) fails, so return traffic comes back via R2 -> ASA | DMZ (VLAN 92) |
+| One DSW | HSRP moves all VLANs to the other DSW; it still has its own ASA link | Nothing |
 
 ## 7. Known mismatches
 

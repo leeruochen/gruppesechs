@@ -1,6 +1,6 @@
 ; =====================================================================
 ; Tera Term Macro Script for Firepower 1010 (ASA) PTSO Configuration
-; Option 3: Dedicated Routed Link (Ethernet1/3) to DSW1
+; Dedicated routed /30 links to BOTH DSWs (E1/3 -> DSW1, E1/4 -> DSW2)
 ; =====================================================================
 
 ; Enter enable mode
@@ -140,7 +140,15 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Option 3: Dedicated Routed Inside Transit Port to DSW1 (G1/0/11)
+; Routed Inside Transit Links, one /30 per DSW (5 Nov redesign)
+; Two routed ports can't share a subnet, which is why E1/4 used to be shut.
+; Giving each DSW its own /30 removes that limit:
+;   E1/3 inside  -> DSW1 G1/0/11  172.16.0.96/30   (ASA .97,  DSW1 .98)
+;   E1/4 inside2 -> DSW2 G1/0/11  172.16.0.100/30  (ASA .101, DSW2 .102)
+; Both carry the same INSIDE_IN ACL and the same standby PAT, so users are
+; treated identically whichever DSW they enter through. The DSWs advertise each
+; user VLAN cheaper from its HSRP Active switch, so return traffic leaves on
+; the same interface the outbound traffic arrived on.
 sendln 'interface Ethernet1/3'
 wait '#'
 sendln 'description Inside_Transit_to_DSW1_G1_0_11'
@@ -151,7 +159,7 @@ sendln 'nameif inside'
 wait '#'
 sendln 'security-level 100'
 wait '#'
-sendln 'ip address 172.16.0.97 255.255.255.248'
+sendln 'ip address 172.16.0.97 255.255.255.252'
 wait '#'
 sendln 'speed 1000'
 wait '#'
@@ -164,18 +172,25 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Spare Link to DSW2 (Kept shutdown to avoid multi-chassis conflicts)
 sendln 'interface Ethernet1/4'
 wait '#'
-sendln 'description Spare_Link_to_DSW2_G1_0_11_SPARE'
+sendln 'description Inside_Transit_to_DSW2_G1_0_11'
 wait '#'
 sendln 'no switchport'
 wait '#'
-sendln 'no nameif'
+sendln 'nameif inside2'
 wait '#'
-sendln 'no ip address'
+sendln 'security-level 100'
 wait '#'
-sendln 'shutdown'
+sendln 'ip address 172.16.0.101 255.255.255.252'
+wait '#'
+sendln 'speed 1000'
+wait '#'
+sendln 'duplex full'
+wait '#'
+sendln 'no shutdown'
+wait '#'
+sendln 'ospf cost 10'
 wait '#'
 sendln 'exit'
 wait '#'
@@ -219,40 +234,17 @@ wait '#'
 sendln 'exit'
 wait '#'
 
+; E1/7 used to carry the DMZ-backup SVI (Vlan92 'dmz', .86). REMOVED 5 Nov.
+; A second firewall interface in the DMZ subnet gave the ASA a connected route
+; that beat OSPF and skipped the PA (P1), and the DMZ servers can only have one
+; gateway (.81) because the ASA and PA can't share an address. The DMZ now
+; belongs to the PA only: if the PA fails, the DMZ is down by design.
+; On a live box that still has it, run 'no interface Vlan92' first (see
+; HANDOVER.md, migration steps).
 sendln 'interface Ethernet1/7'
 wait '#'
-sendln 'description Link_to_DSW2_G1_0_15_VLAN92_Bridge'
+sendln 'description UNUSED_PORT'
 wait '#'
-sendln 'switchport mode access'
-wait '#'
-sendln 'switchport access vlan 92'
-wait '#'
-sendln 'no shutdown'
-wait '#'
-sendln 'exit'
-wait '#'
-
-sendln 'interface Vlan92'
-wait '#'
-sendln 'description Backup_DMZ_Servers_Gateway_SVI'
-wait '#'
-sendln 'nameif dmz'
-wait '#'
-sendln 'security-level 50'
-wait '#'
-sendln 'ip address 172.16.0.86 255.255.255.248'
-wait '#'
-; KEPT SHUT DOWN in normal operation (P1 fix, verified 4 Nov: HR DNS to .83
-; started working once this was shut).
-; While up, the ASA has a directly connected route to 172.16.0.80/29, and a
-; connected route always beats OSPF. So the ASA delivered HR/IT traffic for the
-; DMZ straight out this interface, skipping the PA. The DMZ servers reply via
-; their gateway, the PA (.81), which had never seen the request and dropped the
-; reply. Firewalls need both directions on the same path.
-; Shut, the ASA learns 172.16.0.80/29 from the PA via OSPF (via .105) and DMZ
-; traffic goes ASA -> PA -> DMZ as the serial design intends.
-; MANUAL FAILOVER ONLY: if the PA fails, 'no shutdown' this interface AND point
-; the DMZ servers' default route at 172.16.0.86.
 sendln 'shutdown'
 wait '#'
 sendln 'exit'
@@ -298,20 +290,22 @@ wait '#'
 ; ROOT-CAUSE FIX for 'ip_multicast_ctl failed to get channel 6/7':
 ;   On the Firepower 1010 ASA, OSPF cannot join its multicast groups
 ;   (224.0.0.5/6) on VLAN SVIs that are backed by switchports. Vlan69 (server,
-;   on E1/6) and Vlan92 (dmz, on E1/7) are exactly such SVIs, so enabling OSPF
+;   on E1/6) and the old Vlan92 (dmz, removed 5 Nov) are such SVIs, so enabling OSPF
 ;   on them threw this error (confirmed: it fired even on 'clear configure
 ;   router ospf', i.e. on teardown - ruling out a paste-speed/scale cause).
-;   OSPF adjacencies are only NEEDED on the three ROUTED PHYSICAL transit links:
-;     inside (E1/3 -> DSW/PA), outside (E1/1 -> PA), wan-backup (E1/2 -> R2).
-;   So we DO NOT run OSPF on the server/dmz SVIs; instead 'redistribute
-;   connected subnets' advertises 172.16.0.72/29 and 172.16.0.80/29 into the
-;   domain as external routes. Verified: neighbors to R2/PA/DSW1 reach FULL,
-;   DSW2 stays 2WAY/DROTHER (normal on a broadcast segment), no multicast errors.
+;   OSPF adjacencies are only NEEDED on the ROUTED PHYSICAL transit links:
+;     inside (E1/3 -> DSW1), inside2 (E1/4 -> DSW2), outside (E1/1 -> PA),
+;     wan-backup (E1/2 -> R2).
+;   So we DO NOT run OSPF on the server SVI; instead 'redistribute connected
+;   subnets' advertises 172.16.0.72/29 into the domain as an external route.
+;   Expected neighbors (all FULL, point-to-point /30s): DSW1, DSW2, PA, R2.
 sendln 'router ospf 1'
 wait '#'
 sendln 'router-id 5.5.5.5'
 wait '#'
-sendln 'network 172.16.0.96 255.255.255.248 area 0'
+sendln 'network 172.16.0.96 255.255.255.252 area 0'
+wait '#'
+sendln 'network 172.16.0.100 255.255.255.252 area 0'
 wait '#'
 sendln 'network 172.16.0.104 255.255.255.252 area 0'
 wait '#'
@@ -455,17 +449,18 @@ wait '#'
 sendln 'exit'
 wait '#'
 
+; DSW1 / DSW2 addresses on their ASA links (E1/3, E1/4).
 sendln 'object-group network DSWs'
 wait '#'
 sendln 'network-object host 172.16.0.98'
 wait '#'
-sendln 'network-object host 172.16.0.99'
+sendln 'network-object host 172.16.0.102'
 wait '#'
 sendln 'exit'
 wait '#'
 
 ; Every DSW address that can source a DHCP relay (P2 fix): each VLAN SVI on
-; both DSWs plus the Vlan100 transit addresses.
+; both DSWs plus the DSWs' ASA-link addresses (.98 DSW1, .102 DSW2).
 sendln 'object-group network DSW-SVIS'
 wait '#'
 sendln 'network-object host 172.16.0.2'
@@ -486,7 +481,7 @@ sendln 'network-object host 172.16.0.67'
 wait '#'
 sendln 'network-object host 172.16.0.98'
 wait '#'
-sendln 'network-object host 172.16.0.99'
+sendln 'network-object host 172.16.0.102'
 wait '#'
 sendln 'exit'
 wait '#'
@@ -515,43 +510,17 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 9. PTSO Standby NAT/PAT Rules
-sendln 'object network WEB-SVR-NAT'
-wait '#'
-sendln 'host 172.16.0.82'
-wait '#'
-sendln 'nat (dmz,wan-backup) static 203.149.210.189'
-wait '#'
-sendln 'exit'
-wait '#'
-
-sendln 'object network DNS-SVR-NAT'
-wait '#'
-sendln 'host 172.16.0.83'
-wait '#'
-sendln 'nat (dmz,wan-backup) static 203.149.210.190'
-wait '#'
-sendln 'exit'
-wait '#'
-
-sendln 'object network JUMP-SSH-NAT'
-wait '#'
-sendln 'host 172.16.0.84'
-wait '#'
-sendln 'nat (dmz,wan-backup) static 203.149.210.185 service tcp ssh 2222'
-wait '#'
-sendln 'exit'
-wait '#'
-
-; NOTE: The "Pool (203.149.210.185) overlap" warning below is EXPECTED and benign.
-; JUMP-SSH-NAT statically maps .185 tcp/2222 -> jump host, while the dynamic PAT
-; overloads the same .185 for outbound sessions. Static port-forward + PAT overload
-; on one address is a valid ASA pattern; the ASA just warns about the shared address.
+; 9. PTSO Standby PAT (used only when the PA is down)
+; Traffic leaves via wan-backup (E1/2 -> R2) only when the OSPF path through
+; the PA disappears, so these rules are idle in normal operation.
+; The DMZ standby NAT (web .189, DNS .190, jump SSH .185:2222) was REMOVED
+; 5 Nov together with the ASA's DMZ interface: with no Vlan92 the ASA has no
+; path to the DMZ, so those rules could never match.
 sendln 'nat (inside,wan-backup) after-auto source dynamic PAT-USERS PUB-PAT'
 wait '#'
-sendln 'nat (server,wan-backup) after-auto source dynamic PAT-USERS PUB-PAT'
+sendln 'nat (inside2,wan-backup) after-auto source dynamic PAT-USERS PUB-PAT'
 wait '#'
-sendln 'nat (dmz,wan-backup) after-auto source dynamic PAT-USERS PUB-PAT'
+sendln 'nat (server,wan-backup) after-auto source dynamic PAT-USERS PUB-PAT'
 wait '#'
 
 ; 10. Time-Range for Transactions Server
@@ -566,9 +535,9 @@ wait '#'
 sendln 'access-list INSIDE_IN extended permit ospf any any'
 wait '#'
 ; DHCP relay (P2 fix, verified 4 Nov): the DSWs relay with the client VLAN's SVI
-; as the source/giaddr, not only .98/.99, so the old 'DSWs'-only line dropped
-; every relayed request. DSW-SVIS covers all of them. (Live also still has the
-; original 'DSWs' line; it's redundant but harmless.)
+; as the source/giaddr, not only their transit addresses, so the old
+; 'DSWs'-only line dropped every relayed request. DSW-SVIS covers all of them.
+; Applied to both inside and inside2 (same ACL).
 sendln 'access-list INSIDE_IN extended permit udp object-group DSW-SVIS object DHCP-SVR eq bootps'
 wait '#'
 sendln 'access-list INSIDE_IN extended permit tcp object HR object FILE-SVR eq 445'
@@ -617,38 +586,20 @@ wait '#'
 sendln 'access-list SERVER_IN extended deny ip any any log'
 wait '#'
 
-sendln 'access-list DMZ_IN extended deny ip object DMZ-SUBNET object INTERNAL log'
-wait '#'
-sendln 'access-list DMZ_IN extended deny ip object DMZ-SUBNET object SERVERS log'
-wait '#'
-sendln 'access-list DMZ_IN extended permit udp object-group JUMP-SVRs any eq ntp'
-wait '#'
-sendln 'access-list DMZ_IN extended permit udp object-group JUMP-SVRs any eq domain'
-wait '#'
-sendln 'access-list DMZ_IN extended deny ip any any log'
-wait '#'
-
+; DMZ_IN and the OUTSIDE_IN web/DNS/jump-SSH permits were REMOVED 5 Nov with
+; the ASA's DMZ interface. They only applied to the standby DMZ path.
 sendln 'access-list OUTSIDE_IN extended permit ospf any any'
-wait '#'
-sendln 'access-list OUTSIDE_IN extended permit tcp any object WEB-SVR eq www'
-wait '#'
-sendln 'access-list OUTSIDE_IN extended permit tcp any object WEB-SVR eq https'
-wait '#'
-sendln 'access-list OUTSIDE_IN extended permit udp any object DNS-SVR eq domain'
-wait '#'
-sendln 'access-list OUTSIDE_IN extended permit tcp any object DNS-SVR eq domain'
-wait '#'
-sendln 'access-list OUTSIDE_IN extended permit tcp any object JUMP-SVR eq ssh'
 wait '#'
 sendln 'access-list OUTSIDE_IN extended deny ip any any log'
 wait '#'
 
 ; Bind ACLs to Interfaces
+; inside (DSW1) and inside2 (DSW2) share INSIDE_IN: same users, same rules.
 sendln 'access-group INSIDE_IN in interface inside'
 wait '#'
-sendln 'access-group SERVER_IN in interface server'
+sendln 'access-group INSIDE_IN in interface inside2'
 wait '#'
-sendln 'access-group DMZ_IN in interface dmz'
+sendln 'access-group SERVER_IN in interface server'
 wait '#'
 sendln 'access-group OUTSIDE_IN in interface outside'
 wait '#'

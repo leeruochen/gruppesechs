@@ -114,32 +114,39 @@ wait '[edit]'
 sendln 'set network interface ethernet ethernet1/3 layer3 interface-management-profile PING-ONLY'
 wait '[edit]'
 
-; Layer 2 Switched Trunk Ports for PTSO & Server Redundancy
+; Layer 2 Switched Ports (R1/R2 transit VLAN and DMZ)
 sendln 'set network interface ethernet ethernet1/2 layer2 lldp enable no'
 wait '[edit]'
 sendln 'set network interface ethernet ethernet1/4 layer2 lldp enable no'
 wait '[edit]'
 sendln 'set network interface ethernet ethernet1/5 layer2 lldp enable no'
 wait '[edit]'
-sendln 'set network interface ethernet ethernet1/6 layer2 lldp enable no'
+
+; ASA-bypass links, routed /30s (5 Nov redesign, replaces the VLAN 100 bypass)
+; The old design bridged eth1/6 and eth1/7 into one PA VLAN (vlan.100). With
+; Po5 also joining the DSWs, that formed a Layer 2 loop (the PA runs no STP),
+; so both ports had to stay down and failover was manual.
+; Now each port is its own routed /30, so there is nothing to loop:
+;   eth1/6 -> DSW1 G1/0/12  172.16.0.116/30  (PA .117, DSW1 .118)
+;   eth1/7 -> DSW2 G1/0/12  172.16.0.120/30  (PA .121, DSW2 .122)
+; OSPF cost 500 keeps them idle while the ASA path (cost 10) exists. They carry
+; user traffic only when the ASA is unreachable from both DSWs. Both stay UP.
+; (Live migration from the old layer2 config: run pa440_cleanup.ttl first.)
+sendln 'set network interface ethernet ethernet1/6 link-state auto'
 wait '[edit]'
-sendln 'set network interface ethernet ethernet1/7 layer2 lldp enable no'
+sendln 'set network interface ethernet ethernet1/6 layer3 ip 172.16.0.117/30'
 wait '[edit]'
-sendln 'set network interface ethernet ethernet1/8 layer2 lldp enable no'
+sendln 'set network interface ethernet ethernet1/6 layer3 interface-management-profile PING-ONLY'
+wait '[edit]'
+sendln 'set network interface ethernet ethernet1/7 link-state auto'
+wait '[edit]'
+sendln 'set network interface ethernet ethernet1/7 layer3 ip 172.16.0.121/30'
+wait '[edit]'
+sendln 'set network interface ethernet ethernet1/7 layer3 interface-management-profile PING-ONLY'
 wait '[edit]'
 
-; CRITICAL (PTSO loop prevention): the inside-bypass ports eth1/6 (DSW1 G1/0/12)
-; and eth1/7 (DSW2 G1/0/12) bridge into vlan.100. Because both DSWs also trunk
-; VLAN 100 to each other (Po5) and to the ASA, leaving these two ports UP forms
-; a Layer 2 loop on VLAN 100 (PA has no STP on L2 ports) - causing frame flooding,
-; duplicate 'inside-l2' sessions, MAC flapping, and intermittent loss of L3
-; reachability across the inside segment. Per the design these bypass ports are a
-; FAILOVER-ONLY path and must stay admin-down in normal operation; bring them up
-; manually only if the ASA serial link (eth1/3) fails. eth1/8 (server backup) too.
-sendln 'set network interface ethernet ethernet1/6 link-state down'
-wait '[edit]'
-sendln 'set network interface ethernet ethernet1/7 link-state down'
-wait '[edit]'
+; eth1/8 used to be the internal-server backup (vlan.69, .78). REMOVED 5 Nov:
+; the internal servers belong to the ASA only (gateway .73). Unused, admin-down.
 sendln 'set network interface ethernet ethernet1/8 link-state down'
 wait '[edit]'
 
@@ -154,16 +161,6 @@ wait '[edit]'
 sendln 'set network interface vlan units vlan.92 interface-management-profile PING-ONLY'
 wait '[edit]'
 
-sendln 'set network interface vlan units vlan.100 ip 172.16.0.100/29'
-wait '[edit]'
-sendln 'set network interface vlan units vlan.100 interface-management-profile PING-ONLY'
-wait '[edit]'
-
-sendln 'set network interface vlan units vlan.69 ip 172.16.0.78/29'
-wait '[edit]'
-sendln 'set network interface vlan units vlan.69 interface-management-profile PING-ONLY'
-wait '[edit]'
-
 ; VLAN Membership & Virtual Interfaces
 sendln 'set network vlan OUTSIDE interface [ ethernet1/2 ethernet1/5 ]'
 wait '[edit]'
@@ -175,16 +172,6 @@ wait '[edit]'
 sendln 'set network vlan VL-DMZ virtual-interface interface vlan.92'
 wait '[edit]'
 
-sendln 'set network vlan VL-INSIDE-BYPASS interface [ ethernet1/6 ethernet1/7 ]'
-wait '[edit]'
-sendln 'set network vlan VL-INSIDE-BYPASS virtual-interface interface vlan.100'
-wait '[edit]'
-
-sendln 'set network vlan VL-SERVER interface [ ethernet1/8 ]'
-wait '[edit]'
-sendln 'set network vlan VL-SERVER virtual-interface interface vlan.69'
-wait '[edit]'
-
 ; ---------------------------------------------------------------------
 ; 5. SECURITY ZONES
 ; ---------------------------------------------------------------------
@@ -193,34 +180,25 @@ wait '[edit]'
 sendln 'set zone outside-l2 network layer2 [ ethernet1/2 ethernet1/5 ]'
 wait '[edit]'
 
-sendln 'set zone inside network layer3 [ ethernet1/3 vlan.100 ]'
-wait '[edit]'
-sendln 'set zone inside-l2 network layer2 [ ethernet1/6 ethernet1/7 ]'
+; eth1/6/7 join 'inside' so users arriving over the bypass hit the same rules
+; as users arriving from the ASA (eth1/3).
+sendln 'set zone inside network layer3 [ ethernet1/3 ethernet1/6 ethernet1/7 ]'
 wait '[edit]'
 
 sendln 'set zone dmz network layer3 vlan.92'
 wait '[edit]'
 sendln 'set zone dmz-l2 network layer2 ethernet1/4'
 wait '[edit]'
-
-sendln 'set zone server network layer3 vlan.69'
-wait '[edit]'
-sendln 'set zone server-l2 network layer2 ethernet1/8'
-wait '[edit]'
+; Zones 'server' / 'server-l2' / 'inside-l2' REMOVED 5 Nov (no PA interface in
+; the internal-server VLAN any more; the internal servers are the ASA's zone).
 
 ; ---------------------------------------------------------------------
 ; 6. VIRTUAL ROUTER & OSPF (PTSO Cost Engineering)
 ; ---------------------------------------------------------------------
-; vlan.69 is deliberately NOT in the virtual router (P9 fix, applied live and
-; verified). Its only port, eth1/8, is admin-down, but while vlan.69 was in the
-; VR the PA still treated 172.16.0.72/29 as directly connected and sent replies
-; to internal servers into the dead interface. Without it, the PA learns
-; 172.16.0.72/29 from the ASA via OSPF (O2 via 172.16.0.106) and replies go back
-; through the ASA. If you ever re-enable the eth1/8 bypass, add vlan.69 back
-; here AND restore the commented OSPF vlan.69 line further down.
-; (Commit shows the warning 'Interface vlan.69 has no virtual-router
-; configured'. That is expected.)
-sendln 'set network virtual-router default interface [ ethernet1/3 vlan.10 vlan.92 vlan.100 ]'
+; The PA has no interface in 172.16.0.72/29 (internal servers). It learns that
+; subnet from the ASA via OSPF (O2 via 172.16.0.106), so traffic to the
+; internal servers always goes through the ASA.
+sendln 'set network virtual-router default interface [ ethernet1/3 ethernet1/6 ethernet1/7 vlan.10 vlan.92 ]'
 wait '[edit]'
 sendln 'set network virtual-router default protocol ospf enable yes'
 wait '[edit]'
@@ -240,14 +218,11 @@ wait '[edit]'
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.10 enable yes passive no metric 10'
 wait '[edit]'
 
-; Backup PTSO Inside Bypass Link to DSW1/DSW2 (Cost 500)
-sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.100 enable yes passive no metric 500'
+; ASA-bypass links to DSW1 / DSW2 (Cost 500, idle while the ASA path exists)
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/6 enable yes passive no metric 500'
 wait '[edit]'
-
-; Backup Internal Server SVI: DISABLED while eth1/8 is down (P9 fix, see the
-; virtual-router note above). Restore together with vlan.69 in the VR:
-; sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.69 enable yes passive yes metric 500'
-; wait '[edit]'
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/7 enable yes passive no metric 500'
+wait '[edit]'
 
 ; STATIC ROUTE: OPTIONAL (OSPF already provides it).
 ; R1's 'default-information originate' already gives the PA an OSPF default
@@ -324,18 +299,11 @@ wait '[edit]'
 sendln 'set address-group INTERNET-USERS static [ HR-NET IT-NET ]'
 wait '[edit]'
 
-; DSW Inside-Transit SVIs (for DHCP relay source from distribution switches)
-sendln 'set address DSW1-SVI ip-netmask 172.16.0.98/32'
-wait '[edit]'
-sendln 'set address DSW2-SVI ip-netmask 172.16.0.99/32'
-wait '[edit]'
-sendln 'set address-group DSWs static [ DSW1-SVI DSW2-SVI ]'
-wait '[edit]'
+; DSW1-SVI / DSW2-SVI / DSWs and service UDP-67 REMOVED 5 Nov: only the
+; deleted PTSO-DHCP-RELAY rule (inside -> server) used them.
 
 ; Custom Service Objects & Schedules
 sendln 'set service TCP-2222 protocol tcp port 2222'
-wait '[edit]'
-sendln 'set service UDP-67 protocol udp port 67'
 wait '[edit]'
 sendln 'set schedule TXN-WINDOW recurring weekly monday 01:00-03:00 tuesday 01:00-03:00 wednesday 01:00-03:00 thursday 01:00-03:00 friday 01:00-03:00'
 wait '[edit]'
@@ -353,14 +321,14 @@ sendln 'set rulebase nat rules NAT-DNS from outside to outside source any destin
 wait '[edit]'
 sendln 'set rulebase nat rules NAT-JUMP-SSH from outside to outside source any destination PUB-PAT service TCP-2222 destination-translation translated-address JUMP-SVR translated-port 22'
 wait '[edit]'
-sendln 'set rulebase nat rules NAT-OUTBOUND from [ inside server dmz ] to outside source [ HR-NET IT-NET TXN-SVR JUMP-SVR JUMP2-SVR DNS-SVR ] destination any service any source-translation dynamic-ip-and-port translated-address PUB-PAT'
+sendln 'set rulebase nat rules NAT-OUTBOUND from [ inside dmz ] to outside source [ HR-NET IT-NET TXN-SVR JUMP-SVR JUMP2-SVR DNS-SVR ] destination any service any source-translation dynamic-ip-and-port translated-address PUB-PAT'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
 ; 9. SECURITY RULES
 ; ---------------------------------------------------------------------
 ; OSPF Adjacency (inter-zone OSPF must be explicitly allowed on PAN-OS)
-sendln 'set rulebase security rules ALLOW-OSPF from [ outside inside server ] to [ outside inside server ] source any destination any source-user any category any application ospf service any action allow log-end no'
+sendln 'set rulebase security rules ALLOW-OSPF from [ outside inside ] to [ outside inside ] source any destination any source-user any category any application ospf service any action allow log-end no'
 wait '[edit]'
 
 ; Inbound DMZ Access
@@ -378,17 +346,14 @@ sendln 'set rulebase security rules INTERNAL-TO-WEB from inside to dmz source IN
 wait '[edit]'
 sendln 'set rulebase security rules IT-TO-JUMP-SSH from inside to dmz source IT-NET destination [ JUMP-SVR JUMP2-SVR ] source-user any category any application ssh service application-default action allow log-end yes'
 wait '[edit]'
-sendln 'set rulebase security rules PTSO-HR-TO-FILE from inside to server source HR-NET destination FILE-SVR source-user any category any application [ ms-ds-smb ping ] service application-default action allow log-end yes'
-wait '[edit]'
-sendln 'set rulebase security rules PTSO-STAFF-ATM-SVR from inside to server source STAFF-ATM destination [ ACCT-SVR TXN-SVR ] source-user any category any application any service any action allow log-end yes'
-wait '[edit]'
-sendln 'set rulebase security rules PTSO-DHCP-RELAY from inside to server source DSWs destination DHCP-SVR source-user any category any application dhcp service UDP-67 action allow log-end yes'
-wait '[edit]'
+; PTSO-HR-TO-FILE, PTSO-STAFF-ATM-SVR and PTSO-DHCP-RELAY (inside -> server)
+; REMOVED 5 Nov with the PA's internal-server interface. They only applied to
+; the old eth1/8 backup path. Internal-server access is enforced by the ASA.
 
 ; Outbound Internet Access (tightened App-ID after end-to-end path confirmed working)
 sendln 'set rulebase security rules HR-IT-INTERNET from inside to outside source INTERNET-USERS destination any source-user any category any application [ web-browsing ssl dns ping ] service application-default action allow log-end yes'
 wait '[edit]'
-sendln 'set rulebase security rules TXN-INTERNET-TIMED from [ inside server ] to [ outside dmz ] source TXN-SVR destination any source-user any category any application [ web-browsing ssl dns ] service application-default schedule TXN-WINDOW action allow log-end yes'
+sendln 'set rulebase security rules TXN-INTERNET-TIMED from inside to [ outside dmz ] source TXN-SVR destination any source-user any category any application [ web-browsing ssl dns ] service application-default schedule TXN-WINDOW action allow log-end yes'
 wait '[edit]'
 sendln 'set rulebase security rules DMZ-OUTBOUND-NTP from dmz to outside source [ JUMP-SVR JUMP2-SVR ] destination any source-user any category any application [ ntp dns ] service application-default action allow log-end yes'
 wait '[edit]'

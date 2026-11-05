@@ -15,8 +15,11 @@
 ;  - Scope: deletes security rules, NAT rules, address-groups, address
 ;    objects, and the custom service objects that pa440.ttl recreates.
 ;    This clears stale members (e.g. DSW1-IP/DSW2-IP) that accumulate from
-;    PAN-OS additive set-merges. Interfaces, zones, VR/OSPF, and mgmt/AAA
-;    are left intact (they are idempotent on re-run and safe to re-apply).
+;    PAN-OS additive set-merges. Mgmt/AAA are left intact.
+;  - Section 7 removes the pre-5-Nov interface design (vlan.100 L2 bypass,
+;    vlan.69 server backup and their zones) so pa440.ttl can make eth1/6/7
+;    routed /30s. Safe to re-run once done: deleting a missing object is
+;    harmless.
 ;  - Deletion order matters: rules first (they reference objects), then
 ;    address-groups (they reference addresses), then addresses and services.
 ; =====================================================================
@@ -163,7 +166,44 @@ sendln 'delete service UDP-67'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 7. VERIFY (optional visual check) & COMMIT
+; 7. REMOVE THE OLD BYPASS / SERVER-BACKUP INTERFACES (5 Nov redesign)
+;    Order: OSPF and VR membership -> zone membership -> zones -> VLAN
+;    objects -> VLAN interfaces -> layer2 port config. A port can't change
+;    from layer2 to layer3 until its layer2 config and zone are gone.
+; ---------------------------------------------------------------------
+sendln 'delete network virtual-router default protocol ospf area 0.0.0.0 interface vlan.100'
+wait '[edit]'
+sendln 'delete network virtual-router default protocol ospf area 0.0.0.0 interface vlan.69'
+wait '[edit]'
+sendln 'delete network virtual-router default interface vlan.100'
+wait '[edit]'
+sendln 'delete network virtual-router default interface vlan.69'
+wait '[edit]'
+sendln 'delete zone inside network layer3 vlan.100'
+wait '[edit]'
+sendln 'delete zone inside-l2'
+wait '[edit]'
+sendln 'delete zone server'
+wait '[edit]'
+sendln 'delete zone server-l2'
+wait '[edit]'
+sendln 'delete network vlan VL-INSIDE-BYPASS'
+wait '[edit]'
+sendln 'delete network vlan VL-SERVER'
+wait '[edit]'
+sendln 'delete network interface vlan units vlan.100'
+wait '[edit]'
+sendln 'delete network interface vlan units vlan.69'
+wait '[edit]'
+sendln 'delete network interface ethernet ethernet1/6 layer2'
+wait '[edit]'
+sendln 'delete network interface ethernet ethernet1/7 layer2'
+wait '[edit]'
+sendln 'delete network interface ethernet ethernet1/8 layer2'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 8. VERIFY (optional visual check) & COMMIT
 ; ---------------------------------------------------------------------
 sendln 'show rulebase security rules'
 wait '[edit]'

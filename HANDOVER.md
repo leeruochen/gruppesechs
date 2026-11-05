@@ -2,7 +2,7 @@
 
 **Rack:** 4E (`gruppesechs.sitict.net`)
 **Topology:** Full PTSO (Parallel Topologically, Serial Operationally)
-**Last updated:** 4 November 2026
+**Last updated:** 5 November 2026 (firewall-link redesign in the macros, not yet applied live: see section 10)
 
 This file is the full context for continuing on another device. Chat history from the AI assistant does not transfer between machines, so everything needed is written here. Test results live in `TEST-PLAN.md`.
 
@@ -46,22 +46,22 @@ The `.ttl` files and `plan.md` contain cleartext credentials. Keep the GitHub re
 
 ```
 HR/IT users -> SW3 (HR) / SW4 (IT)
-  -> DSW1 / DSW2 (HSRP gateways, inter-VLAN ACLs, DHCP relay to .77)
-  -> ASA-1010 inside (.97) -> ASA outside (.106)
+  -> HSRP Active DSW (DSW1: Staff/ATM, DSW2: HR/IT; ACLs, DHCP relay to .77)
+  -> that DSW's own /30 to the ASA (DSW1 -> E1/3 .97, DSW2 -> E1/4 .101)
+  -> ASA outside (.106)
   -> PA-440 eth1/3 (.105): App-ID + the single outbound PAT to 203.149.210.185
   -> PA vlan.10 (.92) -> R1 (.90) -> R1 WAN (.93) -> ISP1 (.94) -> Internet
 
-Internal servers (VLAN 69): gateway ASA .73 only (PA .78 backup removed from routing)
-DMZ servers (VLAN 92):      gateway PA .81 only  (ASA .86 backup admin-down, manual failover)
+Internal servers (VLAN 69): gateway ASA .73 only (no backup gateway)
+DMZ servers (VLAN 92):      gateway PA .81 only  (no backup gateway)
 OOB management (VLAN 99):   R1 G0/1/0 .33 in VRF OOB; devices only accept SSH from .44/.45
 ```
 
-- Only the **PA** does outbound NAT. The ASA and R1 don't NAT.
-- **Both firewalls must see both directions of a connection.** Every "backup" interface that gave a router a second, directly connected path is shut down, because a connected route always beats OSPF and splits traffic across the two firewalls:
-  - PA eth1/6, eth1/7, eth1/8: admin-down (eth1/6/7 also created a VLAN 100 loop).
-  - PA vlan.69: removed from the virtual router and OSPF.
-  - ASA Vlan92 (`dmz`, `.86`): shut down.
-- Consequence: no automatic failover around a failed firewall (an ASA failure is a full outage). Manual failover only.
+- Only the **PA** does outbound NAT in normal operation. The ASA's standby PAT is used only when the PA is down.
+- **Both firewalls must see both directions of a connection.** A connected route always beats OSPF, so:
+  - A backup link on its **own transit subnet** is safe: OSPF cost decides when it's used. These stay **up** and fail over automatically: ASA E1/4 to DSW2, PA eth1/6/7 to DSW1/DSW2 (cost 500), ASA E1/2 to R2 (cost 500).
+  - A backup **gateway inside a server subnet** is not safe: it gives the backup firewall a connected route that skips the primary (P1, P9). The ASA and PA also can't share a gateway IP, and Linux won't switch gateways on its own. So these were **removed** (5 Nov): PA vlan.69 `.78` (eth1/8) and ASA Vlan92 `.86` (E1/7).
+- Each server zone belongs to one firewall: internal servers to the ASA, DMZ to the PA. If that firewall fails, its zone is down by design. User internet survives either firewall failing (`TOPOLOGY.md` section 6 has the failover table).
 
 ---
 
@@ -88,15 +88,21 @@ Row `r=4`, column `E=5`, `n=45`, `f = 45 - 16 - 6 = 23`.
 | ATM VLAN 46 | 172.16.0.48/29 | VIP .49, DSW1 .50, DSW2 .51; DHCP .52-.54 |
 | HR VLAN 61 | 172.16.0.56/29 | VIP .57, DSW1 .58, DSW2 .59; .60 reserved; DHCP .61-.62 |
 | IT VLAN 67 | 172.16.0.64/29 | VIP .65, DSW1 .66, DSW2 .67; DHCP .68-.70 |
-| Internal servers VLAN 69 | 172.16.0.72/29 | ASA .73, File .74, Accounts .75, Txn .76, DHCP .77, PA .78 (unused) |
-| DMZ VLAN 92 | 172.16.0.80/29 | PA .81, Web .82, DNS .83, Jump1 .84, Jump2 .85, ASA .86 (shut) |
+| Internal servers VLAN 69 | 172.16.0.72/29 | ASA .73, File .74, Accounts .75, Txn .76, DHCP .77 (.78 unused) |
+| DMZ VLAN 92 | 172.16.0.80/29 | PA .81, Web .82, DNS .83, Jump1 .84, Jump2 .85 (.86 unused) |
 | Routers <-> PA (PA vlan.10) | 172.16.0.88/29 | R1 .90, R2 .91, PA .92 |
-| Inside transit (VLAN 100) | 172.16.0.96/29 | ASA .97, DSW1 .98, DSW2 .99, PA .100 (bypass, down) |
+| ASA <-> DSW1 | 172.16.0.96/30 | ASA E1/3 `inside` .97, DSW1 Gi1/0/11 .98 |
+| ASA <-> DSW2 | 172.16.0.100/30 | ASA E1/4 `inside2` .101, DSW2 Gi1/0/11 .102 |
 | PA <-> ASA serial | 172.16.0.104/30 | PA eth1/3 .105, ASA E1/1 .106 |
 | R1 <-> R2 direct | 172.16.0.108/30 | R1 .109, R2 .110 |
 | R2 <-> ASA bypass | 172.16.0.112/30 | R2 .113, ASA E1/2 .114 |
+| PA <-> DSW1 bypass | 172.16.0.116/30 | PA eth1/6 .117, DSW1 Gi1/0/12 .118 |
+| PA <-> DSW2 bypass | 172.16.0.120/30 | PA eth1/7 .121, DSW2 Gi1/0/12 .122 |
+| DSW1 <-> DSW2 (VLAN 100 on Po5) | 172.16.0.124/30 | DSW1 .125, DSW2 .126 |
 
-HSRP: DSW1 Active for VLANs 23/46, DSW2 Active for VLANs 61/67.
+Before 5 Nov, VLAN 100 was a shared `/29` (ASA .97, DSW1 .98, DSW2 .99, PA .100). Two routed ports can't share a subnet, which is why ASA E1/4 had to stay shut. One `/30` per link removes that limit.
+
+HSRP: DSW1 Active for VLANs 23/46, DSW2 Active for VLANs 61/67. Each DSW tracks its own ASA link (`track 10` = IP SLA ping to `.97` / `.101`, decrement 30). Each DSW advertises its Active VLANs at OSPF cost 10 and the others at 20, so the ASA returns traffic to the Active DSW.
 
 ### 3.3 Public mappings (decided 4 Nov)
 
@@ -124,8 +130,8 @@ The PA originally used `.186`/`.187`. Changed to `.189`/`.190` to match `plan.md
 - Tera Term: the PA macro waits on `[edit]`, not `#`, to avoid command collisions.
 
 ### Things a macro can't restore
-1. **Po5 cabling**: DSW1 Gi1/0/9-10 <-> DSW2 Gi1/0/9-10. If it's down, DSW2 (HR/IT's active gateway) can't reach the ASA.
-2. **PA eth1/6/7/8 and ASA Vlan92 must stay down.** Don't bring them up as a "fix".
+1. **Po5 cabling**: DSW1 Gi1/0/9-10 <-> DSW2 Gi1/0/9-10. It carries the user VLANs (HSRP hellos), VLAN 69/92 and the DSW1-DSW2 transit (VLAN 100). Since 5 Nov each DSW has its own ASA link, so Po5 is no longer in the HR/IT path, but it's still needed.
+2. **Cabling after the 5 Nov redesign:** ASA E1/4 <-> DSW2 Gi1/0/11 must be connected. Unplug PA eth1/8 <-> DSW1 Gi1/0/15 and ASA E1/7 <-> DSW2 Gi1/0/15 (no longer used). PA eth1/6/7 stay **up** now; they're routed `/30`s, so they can't loop.
 3. **R1 default must be `.94`**, never `.93` (R1's own IP).
 4. **Proxmox LAN 4 (`eno6`, bond primary) must be cabled to DSW1 Gi1/0/24.** Plugging a laptop into LAN 4 makes the bond send all OOB traffic to the laptop. Use DSW1 Gi1/0/21 (VLAN 99, `.46/28`) for a management laptop instead.
 
@@ -165,6 +171,8 @@ The school image puts some router ports into the factory `Mgmt-vrf`. On R1/R2 G0
 | 20 | Inbound HTTPS to the web server had no NAT (P4) | `NAT-WEB-HTTPS` | `pa440.ttl`, `pa440_cleanup.ttl` |
 | 21 | PA public IPs (.186/.187) didn't match plan.md / ASA (.189/.190) | `PUB-WEB` .189, `PUB-DNS` .190 | `pa440.ttl` |
 | 22 | Users couldn't resolve other racks' names (only on the lab DNS) | VM101 forwards to ICT DNS `172.18.4.32`; PA `ICT-DNS` added to `DNS-SVR-FORWARD` | `pa440.ttl`, `pa440_cleanup.ttl`, VM101 `named.conf.options` |
+| 23 | Backup links needed manual `no shutdown` (not allowed in the demo); ASA failure was a full outage (P8) | 5 Nov redesign: firewall-to-DSW links are routed `/30`s (ASA E1/3 + E1/4, PA eth1/6 + eth1/7), all up; server-subnet backups (PA `.78`, ASA `.86`) removed; HSRP and default route track each DSW's own ASA link. **Not applied live yet** (section 10) | all firewall and DSW macros |
+| 24 | HSRP `track 1 interface Vlan100` never fired (Po5 kept the SVI up), and decrement 20 tied 110 with 90, so DSW2's higher IP kept 61/67 | `track 10` (IP SLA to own ASA link), decrement 30 | `dsw1.ttl`, `dsw2.ttl` |
 
 ### Why `R1# ping 8.8.8.8` fails (don't re-diagnose)
 R1 sources from `172.17.9.93` on the WAN `/30`, which the ISP doesn't route to the internet. Hosts PAT'd to `203.149.210.185` work. Test internet from an HR/IT host, never from R1.
@@ -174,7 +182,7 @@ Every static route in the macros has a `REQUIRED` or `OPTIONAL` comment.
 
 | Route | Status |
 |-------|--------|
-| DSW1/2 `0.0.0.0/0 via .97 track 10` | OPTIONAL (OSPF provides it; kept to force the ASA path) |
+| DSW1 `0.0.0.0/0 via .97 track 10`, DSW2 `via .101 track 10` | OPTIONAL (OSPF provides it; pins the ASA path and withdraws when the DSW loses its ASA link) |
 | PA `DEFAULT-OUT 0.0.0.0/0 via .90` | OPTIONAL (OSPF provides it) |
 | DSW1/2 `vrf OOB 0.0.0.0/0 via .33` | REQUIRED |
 | R1 `0.0.0.0/0 via .94 track 1` | REQUIRED (source of the OSPF default) |
@@ -195,7 +203,8 @@ Every static route in the macros has a `REQUIRED` or `OPTIONAL` comment.
 | DSW HSRP permit (fix #18) | present | applied on both (seen in `ACL_ATM_IN`, 4 Nov) | None (check `ACL_STAFF_IN` too) |
 | DSW DHCP peer-reply permit (fix #19) | present | applied on both (seen in `ACL_ATM_IN`, 4 Nov); ATM lease works | None |
 | DSW1 Gi1/0/21 management port (VLAN 99) | **not in macro** | configured live (4 Nov) | Add to `dsw1.ttl` once confirmed working |
-| DSW default route | tracked (`ip sla 10`) | plain static via .97 | None (same behaviour) |
+| Firewall-to-DSW links (fix #23) | routed `/30`s, ASA E1/4 + PA eth1/6/7 up, no PA `.78` / ASA `.86` | old shared VLAN 100, ASA E1/4 + PA eth1/6/7/8 down, ASA Vlan92 shut | Apply with section 10 |
+| DSW default route | tracked (`ip sla 10` to own ASA link) | plain static via .97 | Apply with section 10 (the plain static does **not** fail over) |
 | R1 extra `0.0.0.0/0 .94 250` | absent | present (harmless) | None |
 | ASA live `INSIDE_IN` | `DSW-SVIS` bootps line only | old `DSWs` bootps line also present (redundant) | Optional: `no access-list INSIDE_IN extended permit udp object-group DSWs object DHCP-SVR eq bootps` |
 | Temporary ICMP permits on DSW `ACL_HR_IN` / `ACL_IT_IN` | present, `TODO (FINAL HARDENING)` | present | Remove at Stage 10 |
@@ -249,7 +258,7 @@ Proxmox GUI: `https://172.16.0.43:8006` from the OOB network, e.g. a laptop on D
 ### 8.2 Warnings about `supermicro setup.md`
 - Its netplan blocks contain stray backslashes (`\-`, `\#`, `\[`, `\]`) from a document export -> `unknown key \network`. Use the templates in 8.3.
 - The VM102 block has an invalid extra line `via 172.16.0.86`.
-- The backup gateways `.78` and `.86` don't work (interfaces down/removed) and Linux doesn't fail over between metric routes. Use one gateway.
+- The backup gateways `.78` and `.86` no longer exist (removed 5 Nov), and Linux doesn't fail over between metric routes anyway. Use one gateway.
 - "Linked Clone" needs a template. Use Full Clone.
 - Its cabling description differs from `plan.md`. Either works if the VLAN joins the ports.
 
@@ -580,7 +589,7 @@ Troubleshooting seen on 4 Nov: `duplicate default server` (another site still en
   ```
   Don't set `allow-recursion { any; }`: `.83` is published on the internet (`.190`), so it would become an open resolver.
 - Checks: `dig @127.0.0.1 google.com +short`, `dig @127.0.0.1 wkg00n.sitict.net +short`, `dig @127.0.0.1 gruppesechs.sitict.net +short` (`.189`).
-- If HR's queries time out: confirm ASA Vlan92 is still shut (`show route 172.16.0.80` -> via `.105`), and `tcpdump -ni ens18 port 53` on VM101.
+- If HR's queries time out: confirm the ASA routes the DMZ via the PA (`show route 172.16.0.80` -> via `.105`), and `tcpdump -ni ens18 port 53` on VM101.
 - Optional: a BIND internal view returning `172.16.0.82` for inside users. Today inside users get `.189`, which also works (the traffic goes out to R1 and back in through the PA's inbound NAT).
 
 ### 8.11 Still to set up on VM102/106
@@ -596,6 +605,7 @@ Troubleshooting seen on 4 Nov: `duplicate default server` (another site still en
 
 ## 9. Next steps (in order)
 
+0. **Apply the 5 Nov firewall-link redesign** (section 10), then run `TEST-PLAN.md` Stage 0 and Stage 9.
 1. ~~Fix the jump host -> R1 OOB problem (P19)~~ Resolved. **Finish Stage 7**: NTP works on R1 (check the other devices with `show ntp associations`), then SSH to every device from both jump hosts.
 2. ~~Confirm fixes #18 and #19 live on both DSWs~~ **Confirmed 4 Nov**; ATM got `.52`. Still to do: ATM -> Accounts (`TEST-PLAN.md` 4.9) and re-check HSRP (0.3).
 3. **Add DSW1 Gi1/0/21** (management port) to `dsw1.ttl` once confirmed.
@@ -605,3 +615,214 @@ Troubleshooting seen on 4 Nov: `duplicate default server` (another site still en
 7. **Fix P6** (R1 `WAN-IN` `.94` -> `.93`) and decide on P3, P11, P15.
 8. **Final hardening (Stage 10):** remove the temporary ICMP permits on both DSWs, tighten PA `HR-IT-INTERNET`, re-enable ASA command authorization (after TACACS works), re-test.
 9. **Demo day:** set the final TXN-WINDOW (ASA `time-range`, PA `schedule`).
+
+---
+
+## 10. Applying the 5 Nov firewall-link redesign to the live devices
+
+The macros describe the new design. A device rebuilt from its macro after a reload gets it automatically. To change the **running** devices without a reload, use the steps below. Do it in one session; expect short interruptions while OSPF reconverges. Untested on the devices: check each step's output before moving on.
+
+**Order:** cabling -> PA -> DSW1 -> DSW2 -> ASA. The PA goes first so its eth1/6/7 bypass is up while the ASA links are being changed. On each DSW, Gi1/0/12 (PA link) is changed first for the same reason.
+
+### 10.1 Cabling
+- Confirm ASA E1/4 <-> DSW2 Gi1/0/11 is connected.
+- At the end, unplug PA eth1/8 <-> DSW1 Gi1/0/15 and ASA E1/7 <-> DSW2 Gi1/0/15.
+
+### 10.2 PA
+Run `pa440_cleanup.ttl`, then `pa440.ttl`. The cleanup's new section 7 removes vlan.100, vlan.69, `VL-INSIDE-BYPASS`, `VL-SERVER`, zones `inside-l2` / `server` / `server-l2`, and the layer2 config on eth1/6/7/8.
+
+Side effects of re-running the macros:
+- The cleanup deletes `TEMP-SVR-UPDATES` and `TEMP-SVR-NAT` (8.4). Re-add them afterwards if installs (Wazuh) are still pending.
+- `HR-IT-INTERNET` becomes the tightened macro version (`web-browsing ssl dns ping`), not the loose live `any/any` (section 6).
+
+Check: `show interface ethernet1/6` and `1/7` up with `.117/30` / `.121/30`.
+
+### 10.3 DSW1 (`configure terminal`)
+```
+interface GigabitEthernet1/0/12
+ no switchport
+ description Routed_Bypass_to_PA_eth1_6
+ ip address 172.16.0.118 255.255.255.252
+ ip ospf cost 500
+ ip flow monitor bank-flow-monitor input
+ no ip redirects
+ no ip proxy-arp
+ no shutdown
+router ospf 1
+ no passive-interface GigabitEthernet1/0/12
+ network 172.16.0.116 0.0.0.3 area 0
+! Vlan100 must give up .98 before Gi1/0/11 can take it
+interface Vlan100
+ description DSW1_DSW2_Transit_over_Po5
+ ip address 172.16.0.125 255.255.255.252
+interface GigabitEthernet1/0/11
+ no switchport
+ description Routed_Transit_to_ASA_E1_3
+ ip address 172.16.0.98 255.255.255.252
+ ip ospf cost 10
+ ip flow monitor bank-flow-monitor input
+ no ip redirects
+ no ip proxy-arp
+ no shutdown
+interface GigabitEthernet1/0/15
+ description UNUSED_PORTS
+ switchport access vlan 727
+ shutdown
+vlan 100
+ name DSW_TRANSIT
+router ospf 1
+ no network 172.16.0.96 0.0.0.7 area 0
+ network 172.16.0.96 0.0.0.3 area 0
+ network 172.16.0.124 0.0.0.3 area 0
+ no passive-interface GigabitEthernet1/0/11
+no ip sla 10
+ip sla 10
+ icmp-echo 172.16.0.97 source-interface GigabitEthernet1/0/11
+ frequency 5
+ip sla schedule 10 life forever start-time now
+track 10 ip sla 10 reachability
+no ip route 0.0.0.0 0.0.0.0 172.16.0.97
+ip route 0.0.0.0 0.0.0.0 172.16.0.97 track 10
+interface Vlan23
+ ip ospf cost 10
+ no standby 23 track 1
+ standby 23 track 10 decrement 30
+interface Vlan46
+ ip ospf cost 10
+ no standby 46 track 1
+ standby 46 track 10 decrement 30
+interface Vlan61
+ ip ospf cost 20
+ no standby 61 track 1
+ standby 61 track 10 decrement 30
+interface Vlan67
+ ip ospf cost 20
+ no standby 67 track 1
+ standby 67 track 10 decrement 30
+no track 1
+```
+
+### 10.4 DSW2 (`configure terminal`)
+```
+interface GigabitEthernet1/0/12
+ no switchport
+ description Routed_Bypass_to_PA_eth1_7
+ ip address 172.16.0.122 255.255.255.252
+ ip ospf cost 500
+ ip flow monitor bank-flow-monitor input
+ no ip redirects
+ no ip proxy-arp
+ no shutdown
+router ospf 1
+ no passive-interface GigabitEthernet1/0/12
+ network 172.16.0.120 0.0.0.3 area 0
+interface Vlan100
+ description DSW1_DSW2_Transit_over_Po5
+ ip address 172.16.0.126 255.255.255.252
+interface GigabitEthernet1/0/11
+ no switchport
+ description Routed_Transit_to_ASA_E1_4
+ ip address 172.16.0.102 255.255.255.252
+ ip ospf cost 10
+ ip flow monitor bank-flow-monitor input
+ no ip redirects
+ no ip proxy-arp
+ no shutdown
+interface GigabitEthernet1/0/15
+ description UNUSED_PORTS
+ switchport access vlan 727
+ shutdown
+vlan 100
+ name DSW_TRANSIT
+router ospf 1
+ no network 172.16.0.96 0.0.0.7 area 0
+ network 172.16.0.100 0.0.0.3 area 0
+ network 172.16.0.124 0.0.0.3 area 0
+ no passive-interface GigabitEthernet1/0/11
+no ip sla 10
+ip sla 10
+ icmp-echo 172.16.0.101 source-interface GigabitEthernet1/0/11
+ frequency 5
+ip sla schedule 10 life forever start-time now
+track 10 ip sla 10 reachability
+no ip route 0.0.0.0 0.0.0.0 172.16.0.97
+ip route 0.0.0.0 0.0.0.0 172.16.0.101 track 10
+interface Vlan23
+ ip ospf cost 20
+ no standby 23 track 1
+ standby 23 track 10 decrement 30
+interface Vlan46
+ ip ospf cost 20
+ no standby 46 track 1
+ standby 46 track 10 decrement 30
+interface Vlan61
+ ip ospf cost 10
+ no standby 61 track 1
+ standby 61 track 10 decrement 30
+interface Vlan67
+ ip ospf cost 10
+ no standby 67 track 1
+ standby 67 track 10 decrement 30
+no track 1
+```
+Track 10 stays Down on DSW2 until the ASA's E1/4 is configured (10.5). HSRP moves 61/67 to DSW1 meanwhile; that's expected.
+
+### 10.5 ASA (`configure terminal`)
+```
+! Remove the DMZ backup (references first, then the interface)
+no access-group DMZ_IN in interface dmz
+no nat (dmz,wan-backup) after-auto source dynamic PAT-USERS PUB-PAT
+object network WEB-SVR-NAT
+ no nat (dmz,wan-backup) static 203.149.210.189
+object network DNS-SVR-NAT
+ no nat (dmz,wan-backup) static 203.149.210.190
+object network JUMP-SSH-NAT
+ no nat (dmz,wan-backup) static 203.149.210.185 service tcp ssh 2222
+exit
+no object network WEB-SVR-NAT
+no object network DNS-SVR-NAT
+no object network JUMP-SSH-NAT
+clear configure access-list DMZ_IN
+no access-list OUTSIDE_IN extended permit tcp any object WEB-SVR eq www
+no access-list OUTSIDE_IN extended permit tcp any object WEB-SVR eq https
+no access-list OUTSIDE_IN extended permit udp any object DNS-SVR eq domain
+no access-list OUTSIDE_IN extended permit tcp any object DNS-SVR eq domain
+no access-list OUTSIDE_IN extended permit tcp any object JUMP-SVR eq ssh
+interface Vlan92
+ no nameif
+exit
+no interface Vlan92
+interface Ethernet1/7
+ description UNUSED_PORT
+ shutdown
+! Split VLAN 100 into two /30s
+router ospf 1
+ no network 172.16.0.96 255.255.255.248 area 0
+interface Ethernet1/3
+ ip address 172.16.0.97 255.255.255.252
+interface Ethernet1/4
+ description Inside_Transit_to_DSW2_G1_0_11
+ no switchport
+ nameif inside2
+ security-level 100
+ ip address 172.16.0.101 255.255.255.252
+ speed 1000
+ duplex full
+ ospf cost 10
+ no shutdown
+router ospf 1
+ network 172.16.0.96 255.255.255.252 area 0
+ network 172.16.0.100 255.255.255.252 area 0
+access-group INSIDE_IN in interface inside2
+nat (inside2,wan-backup) after-auto source dynamic PAT-USERS PUB-PAT
+object-group network DSWs
+ no network-object host 172.16.0.99
+ network-object host 172.16.0.102
+object-group network DSW-SVIS
+ no network-object host 172.16.0.99
+ network-object host 172.16.0.102
+```
+Some `no` lines may report "does not exist" if that piece was never applied live. That's harmless.
+
+### 10.6 Verify
+`TEST-PLAN.md` Stage 0 (0.3-0.6b, 0.9-0.11), then 2.1 (HR internet), 4.x (HR file share), 5.x (HR -> DMZ DNS/web), then Stage 9.

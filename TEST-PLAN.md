@@ -93,14 +93,14 @@ Found by reading the configs against `plan.md`. Each links to the test that expo
 
 | # | Problem | Status | Exposed by |
 |---|---------|--------|-----------|
-| P1 | ASA delivered HR/IT -> DMZ traffic out its own `dmz` interface (Vlan92), skipping the PA; replies via the PA were dropped | **FIXED 4 Nov** (ASA Vlan92 shut down; manual failover only) | 5.4, 5.6 |
+| P1 | ASA delivered HR/IT -> DMZ traffic out its own `dmz` interface (Vlan92), skipping the PA; replies via the PA were dropped | **FIXED 4 Nov** (ASA Vlan92 shut down). 5 Nov: Vlan92 removed entirely | 5.4, 5.6 |
 | P2 | ASA only permitted DHCP relay from `.98/.99` | **FIXED 4 Nov** (`DSW-SVIS` object-group in `INSIDE_IN` / `SERVER_IN`) | 4.10 |
 | P3 | Txn server can't use DNS `.83`: `SERVER_IN` line 1 denies SERVERS -> INTERNAL first | Open | 8.3 |
 | P4 | No NAT for inbound HTTPS to the web server | **FIXED 4 Nov** (`NAT-WEB-HTTPS`) | 6.2 |
 | P5 | Servers had no internet for `apt install`; DNS server couldn't reach forwarders | **Partly fixed.** DNS forwarders permanent (`DNS-SVR-FORWARD`, incl. ICT DNS). Package installs use the **temporary** rules (HANDOVER.md 8.4), still in place | 8.4, 8.9 |
 | P6 | R1 `WAN-IN` SSH/Telnet denies reference `.94` (ISP), not `.93` (R1) | Open (low impact: the final deny still blocks it) | 6.7, 7.12 |
 | P7 | HR <-> IT ping works while the temporary ICMP permits exist | Expected until Stage 10 | 3.5 |
-| P8 | An ASA failure is a full outage (no automatic bypass) | By design (bypass ports down) | 9.4 |
+| P8 | An ASA failure is a full outage (no automatic bypass) | **Redesigned 5 Nov** (PA eth1/6/7 are routed /30s, up, cost 500: users fail over to the PA automatically; internal servers are down by design). Test after the macros are applied | 9.4 |
 | P9 | PA treated `172.16.0.72/29` as connected on dead vlan.69 | **FIXED 4 Nov** (vlan.69 removed from VR and OSPF) | 8.2 |
 | P10 | `ACL_STAFF_IN` / `ACL_ATM_IN` dropped the peer DSW's HSRP hellos; both DSWs Active for VLANs 23/46 | **FIXED 4 Nov** (`permit udp <subnet> host 224.0.0.102 eq 1985`). Re-check 0.3 | 0.3 |
 | P11 | DHCP renewals (unicast from client IPs) denied by ASA `INSIDE_IN` | Open (clients fall back to broadcast; slower renewals only) | 1B |
@@ -122,14 +122,16 @@ Found by reading the configs against `plan.md`. Each links to the test that expo
 | 0.1 | DSW1, DSW2 | `show etherchannel summary` | Po1-Po5 `(SU)`, members `(P)`. **Po5 must be up.** | PASS 4 Nov |
 | 0.2 | SW1-SW4 | `show etherchannel summary` | Both uplinks `(SU)` | PASS 4 Nov |
 | 0.3 | DSW1, DSW2 | `show standby brief` | 23/46: DSW1 Active, DSW2 Standby. 61/67: DSW2 Active, DSW1 Standby. No `unknown` standby. | **Re-check** after P10 fix |
-| 0.4 | DSW1, DSW2 | `show ip route 0.0.0.0` | `S* 0.0.0.0/0 via 172.16.0.97` | PASS 4 Nov |
-| 0.5 | DSW1, DSW2 | `show track 10` | Up, only if the macro's tracked route was applied. A plain live static is acceptable. | n/a (plain static live) |
-| 0.6 | ASA | `show ospf neighbor` | R2 `.113`, PA `.105`, DSW1 `.98`, DSW2 `.99` FULL (2WAY/DROTHER also normal). No PA `.100`. | PASS 4 Nov |
+| 0.4 | DSW1, DSW2 | `show ip route 0.0.0.0` | DSW1 `S* via 172.16.0.97`, DSW2 `S* via 172.16.0.101` (5 Nov design) | PASS 4 Nov (old design) |
+| 0.5 | DSW1, DSW2 | `show track 10` | Up on both (required for HSRP and route failover in the 5 Nov design) | |
+| 0.6 | ASA | `show ospf neighbor` | R2 `.113`, PA `.105`, DSW1 `.98`, DSW2 `.102`, all FULL | PASS 4 Nov (old design) |
+| 0.6a | DSW1, DSW2 | `show ip ospf neighbor` | ASA (`.97` / `.101`), PA (`.117` / `.121`), other DSW over Vlan100 (`.126` / `.125`), all FULL | |
+| 0.6b | ASA | `show route 172.16.0.56` and `show route 172.16.0.0` | HR via `.102` (DSW2), Staff via `.98` (DSW1) | |
 | 0.7 | ASA | `show route` | `0.0.0.0/0 via 172.16.0.105`; `172.16.0.80/29 via 172.16.0.105` (not connected `dmz`) | PASS 4 Nov |
 | 0.8 | ASA | `show nat` | No `obj_any` dynamic NAT | PASS 4 Nov |
-| 0.9 | PA | `show routing protocol ospf neighbor` | R1 `.90`, R2 `.91`, ASA `.106` full | PASS 4 Nov |
-| 0.10 | PA | `show routing route` | `0.0.0.0/0 via .90` (static `DEFAULT-OUT`); `172.16.0.72/29 via .106` (O2); HR/IT via `.106` | PASS 4 Nov |
-| 0.11 | PA | `show interface ethernet1/6`, `1/7` | Link state **down** | PASS 4 Nov |
+| 0.9 | PA | `show routing protocol ospf neighbor` | R1 `.90`, R2 `.91`, ASA `.106`, DSW1 `.118`, DSW2 `.122` full | PASS 4 Nov (old design: no DSWs) |
+| 0.10 | PA | `show routing route` | `0.0.0.0/0 via .90` (static `DEFAULT-OUT`); `172.16.0.72/29 via .106` (O2); HR/IT via `.106`, **not** via `.118`/`.122` | PASS 4 Nov |
+| 0.11 | PA | `show interface ethernet1/6`, `1/7` | Link state **up** (5 Nov design), IPs `.117/30`, `.121/30` | PASS 4 Nov (old design: down) |
 | 0.12 | PA | `show running security-policy` | `DENY-ALL` last; `TEMP-SVR-UPDATES` present only while installs are ongoing | PASS 4 Nov |
 | 0.13 | R1 | `show ip route 0.0.0.0` | Only `via 172.17.9.94` | PASS 4 Nov |
 | 0.14 | R1 | `show track` | Track 1 and 2 Up | PASS 4 Nov |
@@ -225,7 +227,7 @@ Targets need inbound ICMP allowed (1.2 step 3) and a listener for TCP rows (e.g.
 |----|-------|------|----------|--------|
 | 5.1 | PA | `ping source 172.16.0.81 host 172.16.0.82` (and `.83`, `.84`, `.85`) | Reply | |
 | 5.2 | Each DMZ VM | `ip route` | One default, via `172.16.0.81` (jump hosts: on `ens19` only) | |
-| 5.3 | ASA | `show interface Vlan92`; `show route 172.16.0.80` | Vlan92 **administratively down**; route via `.105` | PASS 4 Nov |
+| 5.3 | ASA | `show route 172.16.0.80` | Route via `.105` (no Vlan92 after 5 Nov) | PASS 4 Nov |
 
 ### 5B: Access matrix (HR/IT reach Web and DNS; IT reaches the jump hosts)
 
@@ -316,15 +318,17 @@ Same pattern as Lab 3.1: engineer -> jump host -> device management IP. Run from
 
 ## Stage 9: Redundancy (optional, after Stages 0-8)
 
-One at a time, restore after each.
+One at a time, restore after each. Rows 9.2-9.4b are caused physically (unplug a cable or power off), so they need no config change and are safe for the demo. Row 9.1 uses `shutdown`; for the demo, power off DSW2 instead. Keep `ping 8.8.8.8 -t` running on an HR host throughout.
 
 | ID | Action | Expected | Result |
 |----|--------|----------|--------|
 | 9.1 | DSW2: `interface Vlan61` -> `shutdown` | DSW1 takes over VLAN 61; HR `ping 8.8.8.8 -t` drops a few packets then recovers | |
 | 9.2 | Unplug one member of SW3's port-channel to DSW2 | No loss | |
 | 9.3 | Unplug R1 G0/0/1 (R1 <-> PA) | PA reroutes via R2; internet recovers after OSPF converges | |
-| 9.4 | ASA E1/1 `shutdown` | **Full outage (P8)**. Don't bring the bypass ports up as a "fix". | |
-| 9.5 | Restore; re-run 0.1, 0.3, 0.6, 2.1 | Baseline | |
+| 9.4 | Power off the ASA (or unplug E1/3 **and** E1/4) | DSW `show track 10` Down on both; `show ip route 0.0.0.0` via PA (`.117` / `.121`); HR/IT internet and DMZ recover. Internal servers unreachable (by design). | |
+| 9.4a | Unplug DSW2 Gi1/0/11 (DSW2 <-> ASA E1/4) only | DSW2 track 10 Down; `show standby brief`: DSW1 Active for all four VLANs; HR internet recovers, still through the ASA (E1/3) | |
+| 9.4b | Power off the PA | ASA default via R2 `.113`; HR/IT internet recovers via the ASA standby PAT (.185). DMZ down (by design). Unplugging only PA eth1/3 is **not** a valid test: R1 still reaches `.92` and keeps returning traffic to the PA | |
+| 9.5 | Restore; re-run 0.1, 0.3, 0.5, 0.6, 2.1 | Baseline | |
 
 ---
 
