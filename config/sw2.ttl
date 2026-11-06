@@ -28,9 +28,9 @@ sendln 'clock timezone SGT 8 0'
 wait '#'
 
 ; Banner MOTD
-sendln 'banner motd ^C'
-sendln 'WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS SW2 IS PROHIBITED.'
-sendln '^C'
+; One line, '$' as the delimiter. The old '^C' was sent as two literal
+; characters, so IOS used '^' as the delimiter and printed a stray 'C'.
+sendln 'banner motd $WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS SW2 IS PROHIBITED.$'
 wait '#'
 
 ; 1. Root Enable Secret & Manager Local Account
@@ -199,9 +199,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; DEFAULT GATEWAY: REQUIRED (not related to OSPF).
-; Layer 2 access switches run no routing protocol. This lets the management
-; SVI (VLAN 99) reach anything outside 172.16.0.32/28 via R1.
+; for management vlan 99
 sendln 'ip default-gateway 172.16.0.33'
 wait '#'
 
@@ -300,6 +298,21 @@ wait '#'
 sendln 'transport input none'
 wait '#'
 sendln 'exit'
+wait '#'
+
+; The image has vty 16-31 open for SSH with no access-class, which would
+; bypass MGMT-ONLY. Close them. (Harmless error if this model has no vty 16+.)
+sendln 'line vty 16 31'
+wait '#'
+sendln 'transport input none'
+wait '#'
+sendln 'exit'
+wait '#'
+
+; Web UI off (the school image turns it on; it isn't used).
+sendln 'no ip http server'
+wait '#'
+sendln 'no ip http secure-server'
 wait '#'
 
 sendln 'ntp server 172.16.0.44 prefer'

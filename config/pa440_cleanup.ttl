@@ -166,6 +166,12 @@ wait '[edit]'
 sendln 'delete service UDP-67'
 wait '[edit]'
 
+; Schedule: the live box has 'recurring daily'; pa440.ttl recreates it as
+; weekdays only (matches the ASA time-range). Safe here: TXN-INTERNET-TIMED,
+; the only rule using it, was deleted in section 1.
+sendln 'delete schedule TXN-WINDOW'
+wait '[edit]'
+
 ; ---------------------------------------------------------------------
 ; 7. REMOVE THE OLD BYPASS / SERVER-BACKUP INTERFACES (5 Nov redesign)
 ;    Order: OSPF and VR membership -> zone membership -> zones -> VLAN

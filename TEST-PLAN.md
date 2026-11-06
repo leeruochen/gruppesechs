@@ -347,7 +347,7 @@ One at a time, restore after each. Rows 9.2-9.4b are caused physically (unplug a
    ip access-list extended ACL_IT_IN
     no permit icmp 172.16.0.64 0.0.0.7 any
    ```
-3. Tighten PA `HR-IT-INTERNET` to `application [ web-browsing ssl dns ping ] service application-default`.
+3. ~~Tighten PA `HR-IT-INTERNET`~~ Dropped 6 Nov: an App-ID list blocks normal sites (YouTube = `youtube-base`/`quic`, not `ssl`), and plan.md gives HR/IT full internet. The rule stays `any/any`.
 4. Re-run 2.1-2.3, 2.6, 3.5, 4.5, 5.6-5.9, 5.12b, 6.1-6.4.
 
 | ID | Test | Expected after hardening | Result |

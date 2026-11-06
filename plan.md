@@ -995,7 +995,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - INTERNAL-TO-WEB from inside to dmz, source INTERNET-USERS, destination WEB-SVR, application \[ web-browsing ssl \], allow  
   - IT-TO-JUMP-SSH from inside to dmz, source IT-NET, destination \[ JUMP-SVR JUMP2-SVR \], application ssh, allow  
   - PTSO-HR-TO-FILE, PTSO-STAFF-ATM-SVR and PTSO-DHCP-RELAY (inside -> server) removed 5 Nov with the PA's server interface. Internal-server access is enforced by the ASA only.  
-  - HR-IT-INTERNET from inside to outside, source INTERNET-USERS, application \[ web-browsing ssl dns ping \], allow  
+  - HR-IT-INTERNET from inside to outside, source INTERNET-USERS, application any, service any, allow (HR/IT have full internet access; an App-ID list blocked sites like YouTube)  
     - also covers users arriving over the eth1/6/7 bypass (same zone inside) when the ASA is down  
   - TXN-INTERNET-TIMED from inside to \[ outside dmz \], source TXN-SVR, application \[ web-browsing ssl dns \], schedule TXN-WINDOW, allow  
   - DMZ-OUTBOUND-NTP from dmz to outside, source \[ JUMP-SVR JUMP2-SVR \], application \[ ntp dns \], allow  

@@ -30,9 +30,9 @@ sendln 'clock timezone SGT 8 0'
 wait '#'
 
 ; Banner MOTD
-sendln 'banner motd ^C'
-sendln 'WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS DSW1 IS PROHIBITED.'
-sendln '^C'
+; One line, '$' as the delimiter. The old '^C' was sent as two literal
+; characters, so IOS used '^' as the delimiter and printed a stray 'C'.
+sendln 'banner motd $WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS DSW1 IS PROHIBITED.$'
 wait '#'
 
 ; 1. Root Enable Secret & Manager Local Account
@@ -304,10 +304,11 @@ wait '#'
 ; added nothing. Proxmox eno2 (vmbr1, VLAN 69) is cabled straight to ASA E1/6.
 ; VLAN 69 no longer exists on the DSWs.
 
-; 9. Unused Ports Blackholed (G1/0/13 - 21)
+; 9. Unused Ports Blackholed (G1/0/13 - 20)
 ; G1/0/13-14 were Supermicro eno2 and ASA E1/6 (VLAN 69 bridge).
 ; G1/0/15 was the PA eth1/8 server-backup link. Unplug all three cables.
-sendln 'interface range GigabitEthernet1/0/13 - 21'
+; G1/0/21 is the management laptop port (section 9b), not unused.
+sendln 'interface range GigabitEthernet1/0/13 - 20'
 wait '#'
 sendln 'description UNUSED_PORTS'
 wait '#'
@@ -318,6 +319,27 @@ wait '#'
 sendln 'switchport nonegotiate'
 wait '#'
 sendln 'shutdown'
+wait '#'
+sendln 'exit'
+wait '#'
+
+; 9b. Management laptop port (VLAN 99). Laptop: 172.16.0.46/28, gateway .33.
+; Use this instead of Proxmox LAN 4 (HANDOVER.md section 4).
+sendln 'interface GigabitEthernet1/0/21'
+wait '#'
+sendln 'description OOB_Mgmt_Workstation'
+wait '#'
+sendln 'switchport mode access'
+wait '#'
+sendln 'switchport access vlan 99'
+wait '#'
+sendln 'switchport nonegotiate'
+wait '#'
+sendln 'spanning-tree portfast'
+wait '#'
+sendln 'spanning-tree bpduguard enable'
+wait '#'
+sendln 'no shutdown'
 wait '#'
 sendln 'exit'
 wait '#'
@@ -867,6 +889,21 @@ wait '#'
 sendln 'transport input none'
 wait '#'
 sendln 'exit'
+wait '#'
+
+; The image has vty 16-31 open for SSH with no access-class, which would
+; bypass MGMT-ONLY. Close them. (Harmless error if this model has no vty 16+.)
+sendln 'line vty 16 31'
+wait '#'
+sendln 'transport input none'
+wait '#'
+sendln 'exit'
+wait '#'
+
+; Web UI off (the school image turns it on; it isn't used).
+sendln 'no ip http server'
+wait '#'
+sendln 'no ip http secure-server'
 wait '#'
 
 sendln 'ntp server vrf OOB 172.16.0.44 prefer'

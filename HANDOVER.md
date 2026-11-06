@@ -177,6 +177,7 @@ The school image puts some router ports into the factory `Mgmt-vrf`. On R1/R2 G0
 | 22 | Users couldn't resolve other racks' names (only on the lab DNS) | VM101 forwards to ICT DNS `172.18.4.32`; PA `ICT-DNS` added to `DNS-SVR-FORWARD` | `pa440.ttl`, `pa440_cleanup.ttl`, VM101 `named.conf.options` |
 | 23 | Backup links needed manual `no shutdown` (not allowed in the demo); ASA failure was a full outage (P8) | 5 Nov redesign: firewall-to-DSW links are routed `/30`s (ASA E1/3 + E1/4, PA eth1/6 + eth1/7), all up; server-subnet backups (PA `.78`, ASA `.86`) removed; HSRP and default route track each DSW's own ASA link. **Not applied live yet** (section 10) | all firewall and DSW macros |
 | 25 | Single ISP; failover depended on a PA-side static default | Second ISP on R2 (`172.17.10.93/30`, block `129.126.142.184/29`); R1-R2 link replaced by R1 <-> ASA E1/5; NAT moved to R1/R2; PA NAT rules, `DEFAULT-OUT` and ASA standby PAT removed. **Not applied live yet** (section 10) | `r1.ttl`, `r2.ttl`, `firepower1010.ttl`, `pa440.ttl`, `pa440_cleanup.ttl` |
+| 26 | After the rebuild, HR/IT had no internet: the PA had no default route. PAN-OS OSPF rejects default routes by default ("Reject Default Route"); the old `DEFAULT-OUT` static had hidden this. The ASA/DSWs still learned R1's default through the PA, so traffic died at the PA (6 Nov) | `set network virtual-router default protocol ospf reject-default-route no` | `pa440.ttl` |
 | 24 | HSRP `track 1 interface Vlan100` never fired (Po5 kept the SVI up), and decrement 20 tied 110 with 90, so DSW2's higher IP kept 61/67 | `track 10` (IP SLA to own ASA link), decrement 30 | `dsw1.ttl`, `dsw2.ttl` |
 
 ### Why `R1# ping 8.8.8.8` fails (don't re-diagnose)
@@ -187,7 +188,7 @@ Every static route in the macros has a `REQUIRED` or `OPTIONAL` comment.
 
 | Route | Status |
 |-------|--------|
-| DSW1 `0.0.0.0/0 via .97 track 10`, DSW2 `via .101 track 10` | OPTIONAL (OSPF provides it; pins the ASA path and withdraws when the DSW loses its ASA link) |
+| DSW1 `0.0.0.0/0 via .97 track 10`, DSW2 `via .101 track 10` | OPTIONAL, **not in the macros** (OSPF provides the default via the ASA link at cost 10; the PA bypass at cost 500 is only used when the ASA path is gone) |
 | PA `DEFAULT-OUT 0.0.0.0/0 via .90` | **REMOVED 5 Nov** (untracked; would blackhole with R1 down) |
 | DSW1/2 `vrf OOB 0.0.0.0/0 via .33` | REQUIRED |
 | R1 `0.0.0.0/0 via .94 track 1` | REQUIRED (source of the OSPF default) |
@@ -204,13 +205,13 @@ Every static route in the macros has a `REQUIRED` or `OPTIONAL` comment.
 
 | Item | Macro | Live | Action |
 |------|-------|------|--------|
-| PA `HR-IT-INTERNET` | tightened (`web-browsing ssl dns ping`) | loose (`any/any`) | Tighten at Stage 10 |
+| PA `HR-IT-INTERNET` | `any/any` (6 Nov: the App-ID list blocked YouTube/Google; plan.md gives HR/IT full internet) | set to `any/any` live after the rebuild | None |
 | PA `TEMP-SVR-UPDATES` / `TEMP-SVR-NAT`, ASA `SERVER_IN` www/https/8.8.8.8 lines | not in macro (on purpose) | **present** | Remove after the last install (8.4) |
 | DSW HSRP permit (fix #18) | present | applied on both (seen in `ACL_ATM_IN`, 4 Nov) | None (check `ACL_STAFF_IN` too) |
 | DSW DHCP peer-reply permit (fix #19) | present | applied on both (seen in `ACL_ATM_IN`, 4 Nov); ATM lease works | None |
-| DSW1 Gi1/0/21 management port (VLAN 99) | **not in macro** | configured live (4 Nov) | Add to `dsw1.ttl` once confirmed working |
+| DSW1 Gi1/0/21 management port (VLAN 99) | in macro (6 Nov, section 9b) | configured live (4 Nov) | None |
 | Firewall-to-DSW links (fix #23) | routed `/30`s, ASA E1/4 + PA eth1/6/7 up, no PA `.78` / ASA `.86` | old shared VLAN 100, ASA E1/4 + PA eth1/6/7/8 down, ASA Vlan92 shut | Apply with section 10 |
-| DSW default route | tracked (`ip sla 10` to own ASA link) | plain static via .97 | Apply with section 10 (the plain static does **not** fail over) |
+| DSW default route | none (OSPF default only) | plain static via .97 | Reload removes it (the plain static does **not** fail over) |
 | R1 extra `0.0.0.0/0 .94 250` | absent | present (harmless) | None |
 | ASA live `INSIDE_IN` | `DSW-SVIS` bootps line only | old `DSWs` bootps line also present (redundant) | Optional: `no access-list INSIDE_IN extended permit udp object-group DSWs object DHCP-SVR eq bootps` |
 | Temporary ICMP permits on DSW `ACL_HR_IN` / `ACL_IT_IN` | present, `TODO (FINAL HARDENING)` | present | Remove at Stage 10 |
@@ -677,7 +678,7 @@ Troubleshooting seen on 4 Nov: `duplicate default server` (another site still en
 5. **Remove the temporary rules** (8.4) and run `TEST-PLAN.md` 8.5 and 8.9.
 6. **Run the remaining tests** (Stages 2-6 deny tests, Stage 8 Txn window).
 7. **Fix P6** (R1 `WAN-IN` `.94` -> `.93`) and decide on P3, P11, P15.
-8. **Final hardening (Stage 10):** remove the temporary ICMP permits on both DSWs, tighten PA `HR-IT-INTERNET`, re-enable ASA command authorization (after TACACS works), re-test.
+8. **Final hardening (Stage 10):** remove the temporary ICMP permits on both DSWs, re-enable ASA command authorization (after TACACS works), re-test.
 9. **Demo day:** set the final TXN-WINDOW (ASA `time-range`, PA `schedule`).
 
 ---
@@ -810,7 +811,7 @@ Run `pa440_cleanup.ttl`, then `pa440.ttl`. The cleanup also deletes the PA NAT r
 
 Side effects of re-running the macros:
 - The cleanup deletes `TEMP-SVR-UPDATES` and `TEMP-SVR-NAT` (8.4). If installs (Wazuh) are still pending, re-add only `TEMP-SVR-UPDATES`, plus the router `NAT-SOURCES` lines from 8.4. `TEMP-SVR-NAT` isn't needed any more.
-- `HR-IT-INTERNET` becomes the tightened macro version (`web-browsing ssl dns ping`), not the loose live `any/any` (section 6).
+- `HR-IT-INTERNET` is `any/any` in the macro (changed 6 Nov, see section 6).
 
 Check: `show interface ethernet1/6` and `1/7` up with `.117/30` / `.121/30`.
 

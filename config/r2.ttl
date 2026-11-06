@@ -28,9 +28,9 @@ sendln 'clock timezone SGT 8 0'
 wait '#'
 
 ; Banner MOTD
-sendln 'banner motd ^C'
-sendln 'WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS R2 IS PROHIBITED.'
-sendln '^C'
+; One line, '$' as the delimiter. The old '^C' was sent as two literal
+; characters, so IOS used '^' as the delimiter and printed a stray 'C'.
+sendln 'banner motd $WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS R2 IS PROHIBITED.$'
 wait '#'
 
 ; 1. Root Enable Secret & Manager Local Account
@@ -298,15 +298,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; STATIC ROUTE: REQUIRED (OSPF does NOT provide it).
-; The ISP doesn't run OSPF, so this is R2's only default and the source of the
-; backup default it advertises. Withdrawn when ISP2 stops answering (track 1).
 sendln 'ip route 0.0.0.0 0.0.0.0 172.17.10.94 track 1'
-wait '#'
-; STATIC ROUTE: OPTIONAL (best practice). Drops packets for unused ISP2 public
-; addresses instead of looping them back to the ISP. Translated traffic never
-; uses it (NAT happens before routing).
-sendln 'ip route 129.126.142.184 255.255.255.248 Null0'
 wait '#'
 
 ; 6b. NAT for ISP2 (same mappings as R1, on the ISP2 block)
@@ -440,6 +432,21 @@ wait '#'
 sendln 'transport input none'
 wait '#'
 sendln 'exit'
+wait '#'
+
+; The image has vty 16-31 open for SSH with no access-class, which would
+; bypass MGMT-ONLY. Close them. (Harmless error if this model has no vty 16+.)
+sendln 'line vty 16 31'
+wait '#'
+sendln 'transport input none'
+wait '#'
+sendln 'exit'
+wait '#'
+
+; Web UI off (the school image turns it on; it isn't used).
+sendln 'no ip http server'
+wait '#'
+sendln 'no ip http secure-server'
 wait '#'
 
 sendln 'ntp server vrf OOB 172.16.0.44 prefer'

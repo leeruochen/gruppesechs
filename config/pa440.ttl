@@ -207,6 +207,13 @@ sendln 'set network virtual-router default protocol ospf enable yes'
 wait '[edit]'
 sendln 'set network virtual-router default protocol ospf router-id 6.6.6.6'
 wait '[edit]'
+; REQUIRED (found 6 Nov): PAN-OS rejects OSPF default routes unless told not
+; to ('Reject Default Route' is on by default). With DEFAULT-OUT removed, the
+; PA's only default comes from R1/R2 via OSPF; without this line the PA has no
+; default at all and drops all internet traffic (it still floods the LSA, so
+; the ASA and DSWs learn a default that dies at the PA).
+sendln 'set network virtual-router default protocol ospf reject-default-route no'
+wait '[edit]'
 
 ; OSPF Area 0 Interfaces
 ; Primary Serial Link to ASA (Cost 10)
@@ -295,7 +302,7 @@ wait '[edit]'
 
 ; Schedules (service TCP-2222 removed 5 Nov: R1/R2 translate 2222 -> 22, so
 ; the PA sees jump SSH as plain tcp/22)
-sendln 'set schedule TXN-WINDOW recurring weekly monday 01:00-03:00 tuesday 01:00-03:00 wednesday 01:00-03:00 thursday 01:00-03:00 friday 01:00-03:00'
+sendln 'set schedule TXN-WINDOW schedule-type recurring weekly monday 01:00-03:00 tuesday 01:00-03:00 wednesday 01:00-03:00 thursday 01:00-03:00 friday 01:00-03:00'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
@@ -335,8 +342,13 @@ wait '[edit]'
 ; REMOVED 5 Nov with the PA's internal-server interface. They only applied to
 ; the old eth1/8 backup path. Internal-server access is enforced by the ASA.
 
-; Outbound Internet Access (tightened App-ID after end-to-end path confirmed working)
-sendln 'set rulebase security rules HR-IT-INTERNET from inside to outside source INTERNET-USERS destination any source-user any category any application [ web-browsing ssl dns ping ] service application-default action allow log-end yes'
+; Outbound Internet Access. plan.md gives HR and IT full internet access, so
+; any application. (6 Nov: the old App-ID list [ web-browsing ssl dns ping ]
+; broke YouTube/Google: App-ID labels them youtube-base, google-base, quic, not
+; ssl, so they fell through to DENY-ALL.) The rule is still limited by source
+; (HR/IT only) and zone (inside -> outside); internal and DMZ access are
+; controlled by the DSW ACLs, the ASA and the inside -> dmz rules above.
+sendln 'set rulebase security rules HR-IT-INTERNET from inside to outside source INTERNET-USERS destination any source-user any category any application any service any action allow log-end yes'
 wait '[edit]'
 sendln 'set rulebase security rules TXN-INTERNET-TIMED from inside to [ outside dmz ] source TXN-SVR destination any source-user any category any application [ web-browsing ssl dns ] service application-default schedule TXN-WINDOW action allow log-end yes'
 wait '[edit]'

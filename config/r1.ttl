@@ -28,9 +28,9 @@ sendln 'clock timezone SGT 8 0'
 wait '#'
 
 ; Banner MOTD
-sendln 'banner motd ^C'
-sendln 'WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS R1 IS PROHIBITED.'
-sendln '^C'
+; One line, '$' as the delimiter. The old '^C' was sent as two literal
+; characters, so IOS used '^' as the delimiter and printed a stray 'C'.
+sendln 'banner motd $WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS R1 IS PROHIBITED.$'
 wait '#'
 
 ; 1. Root Enable Secret & Manager Local Account
@@ -299,19 +299,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 7. Static Routes (Tracked WAN Default Route)
-; STATIC ROUTE: REQUIRED (OSPF does NOT provide it).
-; The ISP does not run OSPF, so this is the only source of R1's default route.
-; It is also what 'default-information originate' below advertises into OSPF
-; for every other device. Must point at the ISP .94, NEVER .93 (R1 itself).
 sendln 'ip route 0.0.0.0 0.0.0.0 172.17.9.94 track 1'
-wait '#'
-; STATIC ROUTE: OPTIONAL (best practice, not needed for forwarding).
-; The ISP1 public block now ends at R1's NAT. NAT translates inbound packets
-; before routing, so translated traffic never uses this route. It only catches
-; packets for unused public addresses (e.g. .186), which would otherwise follow
-; the default back to the ISP and loop until their TTL expires.
-sendln 'ip route 203.149.210.184 255.255.255.248 Null0'
 wait '#'
 
 ; 7b. NAT (moved from the PA to R1 on 5 Nov; R2 does the same for ISP2)
@@ -450,6 +438,21 @@ wait '#'
 sendln 'transport input none'
 wait '#'
 sendln 'exit'
+wait '#'
+
+; The image has vty 16-31 open for SSH with no access-class, which would
+; bypass MGMT-ONLY. Close them. (Harmless error if this model has no vty 16+.)
+sendln 'line vty 16 31'
+wait '#'
+sendln 'transport input none'
+wait '#'
+sendln 'exit'
+wait '#'
+
+; Web UI off (the school image turns it on; it isn't used).
+sendln 'no ip http server'
+wait '#'
+sendln 'no ip http secure-server'
 wait '#'
 
 sendln 'ntp server vrf OOB 172.16.0.44 prefer'
