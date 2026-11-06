@@ -679,7 +679,7 @@ Troubleshooting seen on 4 Nov: `duplicate default server` (another site still en
 6. **Run the remaining tests** (Stages 2-6 deny tests, Stage 8 Txn window).
 7. **Fix P6** (R1 `WAN-IN` `.94` -> `.93`) and decide on P3, P11, P15.
 8. **Final hardening (Stage 10):** remove the temporary ICMP permits on both DSWs, re-enable ASA command authorization (after TACACS works), re-test.
-9. **Demo day:** set the final TXN-WINDOW (ASA `time-range`, PA `schedule`).
+9. **Demo day:** set the final TXN-WINDOW (ASA `time-range`, PA `schedule`). Exact commands and checks are in `DEMO-DAY.md`.
 
 ---
 
