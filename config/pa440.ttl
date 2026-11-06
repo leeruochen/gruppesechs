@@ -61,10 +61,21 @@ wait '[edit]'
 sendln 'set deviceconfig system permitted-ip 172.16.0.45/32'
 wait '[edit]'
 
+; Admin lockout and idle timeout (HARDENING.md 6.5)
+sendln 'set deviceconfig setting management admin-lockout failed-attempts 5 lockout-time 5'
+wait '[edit]'
+sendln 'set deviceconfig setting management idle-timeout 10'
+wait '[edit]'
+
 ; NTP Servers
 sendln 'set deviceconfig system ntp-servers primary-ntp-server ntp-server-address 172.16.0.44'
 wait '[edit]'
 sendln 'set deviceconfig system ntp-servers secondary-ntp-server ntp-server-address 172.16.0.45'
+wait '[edit]'
+; NTP authentication (HARDENING.md 6.6). Key must match chrony on VM102/VM106.
+sendln 'set deviceconfig system ntp-servers primary-ntp-server authentication-type symmetric-key key-id 1 algorithm md5 authentication-key bigBoyNTPkey'
+wait '[edit]'
+sendln 'set deviceconfig system ntp-servers secondary-ntp-server authentication-type symmetric-key key-id 1 algorithm md5 authentication-key bigBoyNTPkey'
 wait '[edit]'
 
 ; Local Administrator Accounts
@@ -195,6 +206,53 @@ wait '[edit]'
 ; Zones 'server' / 'server-l2' / 'inside-l2' REMOVED 5 Nov (no PA interface in
 ; the internal-server VLAN any more; the internal servers are the ASA's zone).
 
+; Zone protection on 'outside' (HARDENING.md 6.1, labs 2.3/2.5): SYN cookies,
+; UDP/ICMP flood limits, block scanners for 300 s (8001 TCP port scan, 8002
+; host sweep, 8003 UDP port scan), drop spoofed sources. Rates count NEW
+; sessions entering 'outside', so return traffic for HR/IT isn't affected.
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE flood tcp-syn enable yes'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE flood tcp-syn syn-cookies alarm-rate 100 activate-rate 200 maximal-rate 2000'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE flood udp enable yes'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE flood udp red alarm-rate 500 activate-rate 1000 maximal-rate 5000'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE flood icmp enable yes'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE flood icmp red alarm-rate 50 activate-rate 100 maximal-rate 500'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE scan 8001 action block-ip track-by source duration 300'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE scan 8001 interval 2 threshold 100'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE scan 8002 action block-ip track-by source duration 300'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE scan 8002 interval 10 threshold 100'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE scan 8003 action block-ip track-by source duration 300'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE scan 8003 interval 2 threshold 100'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-OUTSIDE discard-ip-spoof yes'
+wait '[edit]'
+sendln 'set zone outside network zone-protection-profile ZP-OUTSIDE'
+wait '[edit]'
+
+; Zone protection on 'dmz' (HARDENING.md 6.2): contain a compromised server.
+sendln 'set network profiles zone-protection-profile ZP-DMZ discard-ip-spoof yes'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-DMZ scan 8001 action block-ip track-by source duration 300'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-DMZ scan 8001 interval 2 threshold 100'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-DMZ scan 8002 action block-ip track-by source duration 300'
+wait '[edit]'
+sendln 'set network profiles zone-protection-profile ZP-DMZ scan 8002 interval 10 threshold 100'
+wait '[edit]'
+sendln 'set zone dmz network zone-protection-profile ZP-DMZ'
+wait '[edit]'
+
 ; ---------------------------------------------------------------------
 ; 6. VIRTUAL ROUTER & OSPF (PTSO Cost Engineering)
 ; ---------------------------------------------------------------------
@@ -220,8 +278,10 @@ wait '[edit]'
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/3 enable yes passive no metric 10'
 wait '[edit]'
 
-; Primary Server Gateway SVI (Cost 10)
-sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.92 enable yes passive no metric 10'
+; DMZ SVI (Cost 10). Passive (HARDENING.md 6.4): the DMZ subnet is still
+; advertised, but a compromised DMZ server can't form an adjacency and inject
+; routes.
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.92 enable yes passive yes metric 10'
 wait '[edit]'
 
 ; Outside Transit SVI to R1/R2 (Cost 10)
@@ -232,6 +292,19 @@ wait '[edit]'
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/6 enable yes passive no metric 500'
 wait '[edit]'
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/7 enable yes passive no metric 500'
+wait '[edit]'
+
+; OSPF MD5 (HARDENING.md 7). Same key as R1/R2/ASA/DSWs on every active OSPF
+; link. vlan.92 is passive, so it needs none.
+sendln 'set network virtual-router default protocol ospf auth-profile OSPF-MD5 md5 1 key GsOspf2026 preferred yes'
+wait '[edit]'
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/3 authentication OSPF-MD5'
+wait '[edit]'
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/6 authentication OSPF-MD5'
+wait '[edit]'
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/7 authentication OSPF-MD5'
+wait '[edit]'
+sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.10 authentication OSPF-MD5'
 wait '[edit]'
 
 ; No static default (DEFAULT-OUT removed 5 Nov). The PA takes its default from
@@ -359,6 +432,24 @@ wait '[edit]'
 ; NAT: DNS-SVR is in the routers' NAT-SOURCES ACL, so these queries leave as
 ; the router's PAT address (.185 of whichever ISP block is in use).
 sendln 'set rulebase security rules DNS-SVR-FORWARD from dmz to outside source DNS-SVR destination [ ICT-DNS DNS-FORWARDERS-1 DNS-FORWARDERS-2 ] source-user any category any application dns service application-default action allow log-end yes'
+wait '[edit]'
+
+; DoS protection per client for the DMZ servers (HARDENING.md 6.3, Slowloris).
+sendln 'set profiles dos-protection DOS-PER-CLIENT type classified'
+wait '[edit]'
+sendln 'set profiles dos-protection DOS-PER-CLIENT resource sessions enabled yes'
+wait '[edit]'
+sendln 'set profiles dos-protection DOS-PER-CLIENT resource sessions max-concurrent-limit 50'
+wait '[edit]'
+sendln 'set rulebase dos rules DOS-DMZ-SERVERS from zone outside'
+wait '[edit]'
+sendln 'set rulebase dos rules DOS-DMZ-SERVERS to zone dmz'
+wait '[edit]'
+sendln 'set rulebase dos rules DOS-DMZ-SERVERS source any destination [ WEB-SVR DNS-SVR JUMP-SVR ] source-user any service any'
+wait '[edit]'
+sendln 'set rulebase dos rules DOS-DMZ-SERVERS action protect'
+wait '[edit]'
+sendln 'set rulebase dos rules DOS-DMZ-SERVERS protection classified profile DOS-PER-CLIENT classification-criteria address source-ip-only'
 wait '[edit]'
 
 ; Default Interzone Deny

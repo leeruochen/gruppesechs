@@ -113,6 +113,11 @@ sendln 'no shutdown'
 wait '#'
 sendln 'ospf cost 10'
 wait '#'
+; OSPF MD5 (HARDENING.md 7). Must match the router/PA/DSW end.
+sendln 'ospf authentication message-digest'
+wait '#'
+sendln 'ospf message-digest-key 1 md5 GsOspf2026'
+wait '#'
 sendln 'exit'
 wait '#'
 
@@ -140,6 +145,11 @@ wait '#'
 sendln 'no shutdown'
 wait '#'
 sendln 'ospf cost 500'
+wait '#'
+; OSPF MD5 (HARDENING.md 7). Must match the router/PA/DSW end.
+sendln 'ospf authentication message-digest'
+wait '#'
+sendln 'ospf message-digest-key 1 md5 GsOspf2026'
 wait '#'
 sendln 'exit'
 wait '#'
@@ -173,6 +183,11 @@ sendln 'no shutdown'
 wait '#'
 sendln 'ospf cost 10'
 wait '#'
+; OSPF MD5 (HARDENING.md 7). Must match the router/PA/DSW end.
+sendln 'ospf authentication message-digest'
+wait '#'
+sendln 'ospf message-digest-key 1 md5 GsOspf2026'
+wait '#'
 sendln 'exit'
 wait '#'
 
@@ -196,6 +211,11 @@ sendln 'no shutdown'
 wait '#'
 sendln 'ospf cost 10'
 wait '#'
+; OSPF MD5 (HARDENING.md 7). Must match the router/PA/DSW end.
+sendln 'ospf authentication message-digest'
+wait '#'
+sendln 'ospf message-digest-key 1 md5 GsOspf2026'
+wait '#'
 sendln 'exit'
 wait '#'
 
@@ -218,6 +238,11 @@ wait '#'
 sendln 'no shutdown'
 wait '#'
 sendln 'ospf cost 500'
+wait '#'
+; OSPF MD5 (HARDENING.md 7). Must match the router/PA/DSW end.
+sendln 'ospf authentication message-digest'
+wait '#'
+sendln 'ospf message-digest-key 1 md5 GsOspf2026'
 wait '#'
 sendln 'exit'
 wait '#'
@@ -614,6 +639,38 @@ wait '#'
 sendln 'exit'
 wait '#'
 
+; 12b. SYN flood + Slowloris limits for the internal servers (HARDENING.md 5.1,
+; labs 2.5/2.6). embryonic limits = SYN flood, per-client-max = Slowloris.
+; Interface policies run alongside global_policy (ICMP inspection unaffected).
+sendln 'access-list MPF_INTERNAL_SVRS extended permit tcp any object SERVERS'
+wait '#'
+sendln 'class-map CM_SVR_PROTECT'
+wait '#'
+sendln 'match access-list MPF_INTERNAL_SVRS'
+wait '#'
+sendln 'exit'
+wait '#'
+sendln 'policy-map PM_INSIDE_PROTECT'
+wait '#'
+sendln 'class CM_SVR_PROTECT'
+wait '#'
+sendln 'set connection conn-max 500 embryonic-conn-max 50 per-client-max 50 per-client-embryonic-max 10'
+wait '#'
+sendln 'set connection timeout embryonic 0:00:15'
+wait '#'
+sendln 'exit'
+wait '#'
+sendln 'exit'
+wait '#'
+sendln 'service-policy PM_INSIDE_PROTECT interface inside'
+wait '#'
+sendln 'service-policy PM_INSIDE_PROTECT interface inside2'
+wait '#'
+sendln 'threat-detection basic-threat'
+wait '#'
+sendln 'threat-detection statistics tcp-intercept'
+wait '#'
+
 ; 13. AAA, SSH, NTP & Syslog over OOB Management
 sendln 'aaa-server TACACS protocol tacacs+'
 wait '#'
@@ -635,15 +692,14 @@ sendln 'aaa authentication ssh console TACACS LOCAL'
 wait '#'
 sendln 'aaa authentication enable console TACACS LOCAL'
 wait '#'
-; WARNING: 'aaa authorization command TACACS LOCAL' is DISABLED until the TACACS
-; servers (172.16.0.44 / .45 = VM102/VM106) are built and verified reachable.
-; With TACACS down, per-command authorization falls back to LOCAL, which denies
-; even basic commands (exit, show) and LOCKS YOU OUT of the ASA. Only enable this
-; AFTER TACACS is confirmed working, and keep a console session open as a safety
-; net when you do. Re-enable with:
-;   sendln 'aaa authorization command TACACS LOCAL'
-; sendln 'aaa authorization command TACACS LOCAL'
-; wait '#'
+; HARDENING.md 5.3: lock a local account after 5 failed logins (privilege-15
+; accounts are exempt). Unlock: clear aaa local user lockout username <user>
+sendln 'aaa local authentication attempts max-fail 5'
+wait '#'
+; Re-enabled 7 Nov (both TACACS servers verified). Keep a console session open
+; when rebuilding in case tac_plus is down (P13).
+sendln 'aaa authorization command TACACS LOCAL'
+wait '#'
 sendln 'aaa accounting command TACACS'
 wait '#'
 
@@ -656,9 +712,18 @@ wait '#'
 sendln 'no http server enable'
 wait '#'
 
-sendln 'ntp server 172.16.0.44 source management prefer'
+; NTP authentication (HARDENING.md 5.4). Key must match chrony on VM102/VM106.
+; To change the key later, enter the new 'ntp authentication-key 1' line only:
+; 'no ntp authentication-key 1 ...' deletes key 1 whatever its value.
+sendln 'ntp authentication-key 1 md5 bigBoyNTPkey'
 wait '#'
-sendln 'ntp server 172.16.0.45 source management'
+sendln 'ntp trusted-key 1'
+wait '#'
+sendln 'ntp authenticate'
+wait '#'
+sendln 'ntp server 172.16.0.44 key 1 source management prefer'
+wait '#'
+sendln 'ntp server 172.16.0.45 key 1 source management'
 wait '#'
 
 sendln 'logging enable'
