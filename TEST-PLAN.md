@@ -1,6 +1,6 @@
 # Punggol Bank: Network Connectivity Test Plan
 
-**Last updated:** 6 November 2026
+**Last updated:** 7 November 2026
 
 Purpose: confirm every connection `plan.md` requires actually works, and every connection it forbids is actually blocked.
 
@@ -9,6 +9,16 @@ How to use it:
 - Every row has an **Expected** result. A deny test passes when the connection **fails**.
 - Fill in the **Result** column (`PASS` / `FAIL` + date + note).
 - When a row fails, run the device-side check for it. That shows which device dropped the traffic.
+
+**Plan from 7 Nov.** Stages 0-8 are done (results below, 6 Nov). The hardening from `HARDENING.md` is applied (`HANDOVER.md` section 11), so re-check 6.5 (Null0 route) and 7.12 (`WAN-IN`) once, and run 8.1-8.3 as part of Stage 13. Order of the remaining work:
+
+1. Install Wazuh and wire the log sources. Stage 12B has the PA log-forwarding config, which is missing from the macros (P20).
+2. Stage 10 (remove the temporary rules and ICMP permits). Do this **before** Stage 9, so redundancy is tested on the final rules.
+3. Stage 9 (redundancy). Unplug tests only, no power-off tests.
+4. Stages 11-13: AAA, logging and monitoring, time window and exposure checks.
+5. Stage 14 (attack readiness), then the attacks in `DEMO-DAY.md` section 3.
+
+Not planned: a macro rebuild rehearsal. The hardening was applied live and the macros were edited to match, but the edited macros have not been run.
 
 **Status at a glance (6 Nov):** the 5 Nov redesign (routed firewall links, second ISP, NAT on R1/R2) is live and Stages 0 to 7 pass. Stages 1 to 5 were reported as working in full, so their rows are marked "(reported)". Stage 6 passes (6.9 not run), and the internal DNS view is live (HR gets `172.16.0.82`). Stage 7 passes: SSH to every device, NTP on the devices checked, and the MGMT-PC deny. **Open:** the R1 `WAN-IN` fix (P6) on the live router, the possible loop for unused public IPs on R1 (6.5), Stage 8 (8.1 to 8.3 not run; the temporary install rules need re-adding for Wazuh), Stages 9 and 10, and the Txn DNS decision (P3, P15). The final TXN-WINDOW is set on demo day: see `DEMO-DAY.md`.
 
@@ -105,13 +115,14 @@ Found by reading the configs against `plan.md`. Each links to the test that expo
 | P10 | `ACL_STAFF_IN` / `ACL_ATM_IN` dropped the peer DSW's HSRP hellos; both DSWs Active for VLANs 23/46 | **FIXED 4 Nov** (`permit udp <subnet> host 224.0.0.102 eq 1985`). **Confirmed 6 Nov** (0.3 passes) | 0.3 |
 | P11 | DHCP renewals (unicast from client IPs) denied by ASA `INSIDE_IN` | Open (clients fall back to broadcast; slower renewals only) | 1B |
 | P12 | Static HR binding blocked the DHCP lease for the same MAC | **FIXED 4 Nov** (static block removed; OPTIONAL in `sw3.ttl`) | 1.1 |
-| P13 | Lockout risk once tac_plus answers (no fallback to local on a "fail") | Open: read before enabling TACACS | 7.4 |
-| P14 | ASA/PA clocks not synced until chrony runs on `.44/.45` | **Fixed 6 Nov**: R1, R2, SW1, ASA and PA synced to `.44`/`.45`. Other devices reported OK | 8.1, 8.2 |
+| P13 | Lockout risk once tac_plus answers (no fallback to local on a "fail") | **Resolved 7 Nov** (both TACACS servers work, ASA command authorization on). Re-test the fallback with TACACS stopped in 11B, with a console session open | 7.4, 11.20-11.24 |
+| P14 | ASA/PA clocks not synced until chrony runs on `.44/.45` | **Fixed 6 Nov**: R1, R2, SW1, ASA and PA synced to `.44`/`.45`. Other devices reported OK. 7 Nov: NTP authentication (key 1) added on R1, R2, DSWs, ASA, PA; SW1-SW4 still plain | 8.1, 8.2 |
 | P15 | Internal servers have no DNS once the temporary rules are removed | Open (decide if any internal server needs DNS) | 8.3 |
 | P16 | Jump SSH (`.185:2222`) might not match `JUMP-SSH-IN` after port translation | **Not an issue** (6.4 passed) | 6.4 |
 | P17 | Wazuh/syslog agents on internal servers can't reach `.84/.85` | Open: needs ASA + PA rules before Wazuh agents | n/a |
 | P18 | DHCP replies addressed to the peer DSW's SVI crossed the user VLAN and were denied by the inbound user ACL (`denied udp 172.16.0.77(67) -> 172.16.0.51(67)`) | **FIXED 4 Nov** in macros (`permit udp host 172.16.0.77 eq bootps any eq bootps`). Confirm with 1.5 | 1.5 |
 | P19 | VM102 (`.44`) couldn't reach R1 `.33`; R1/R2 NTP to `.44` showed `reach 0` | **RESOLVED 4 Nov.** Two separate causes: (1) the ping failure was temporary, almost certainly while Proxmox LAN 4 (the bond's primary) was unplugged / on a laptop; it passed on retry with ARP replies seen on `bond0`. (2) NTP to `.44`: the config was right, but the running chronyd hadn't loaded it, so it wasn't listening on udp/123 (`ss` showed only `127.0.0.1:323`) and was still using the Ubuntu pools. Fixed by restarting chrony and resetting R1's association. R1 now reaches `.44` (stratum 4). | 7.1, 7.14 |
+| P20 | The PA has the syslog server profile `SYSLOG-JUMP` but no log-forwarding profile and no system/config match lists, so its traffic, threat, DoS, zone-protection and system logs never reach `.44`/`.45` (and so never reach Wazuh) | Open: config in Stage 12B, then add it to `pa440.ttl` | 12.11-12.15 |
 
 ---
 
@@ -322,22 +333,26 @@ Same pattern as Lab 3.1: engineer -> jump host -> device management IP. Run from
 
 ## Stage 9: Redundancy (optional, after Stages 0-8)
 
-One at a time, restore after each. Rows 9.2-9.4b are caused physically (unplug a cable or power off), so they need no config change and are safe for the demo. Row 9.1 uses `shutdown`; for the demo, power off DSW2 instead. Keep `ping 8.8.8.8 -t` running on an HR host throughout.
+Run after Stage 10, so the final ACLs are in place. One at a time, restore after each. All failures are caused by **unplugging a cable** (no power-off tests, no config changes), except 9.1, which is a reversible `shutdown`. Keep `ping 8.8.8.8 -t` running on an HR host throughout, and after every restore check that all OSPF neighbours are FULL again (MD5 adjacencies must re-form) and run `show standby brief` on both DSWs.
 
 | ID | Action | Expected | Result |
 |----|--------|----------|--------|
 | 9.1 | DSW2: `interface Vlan61` -> `shutdown` | DSW1 takes over VLAN 61; HR `ping 8.8.8.8 -t` drops a few packets then recovers | |
 | 9.2 | Unplug one member of SW3's port-channel to DSW2 | No loss | |
 | 9.3 | Unplug R1 G0/0/1 (R1 <-> PA) | PA reroutes via R2; internet recovers after OSPF converges | |
-| 9.4 | Power off the ASA (or unplug E1/3 **and** E1/4) | DSW `show track 10` Down on both; `show ip route 0.0.0.0` via PA (`.117` / `.121`); HR/IT internet and DMZ recover. Internal servers unreachable (by design). | |
+| 9.4 | Unplug ASA E1/3 **and** E1/4 (ASA cut off from both DSWs) | DSW `show track 10` Down on both; `show ip route 0.0.0.0` via PA (`.117` / `.121`); HR/IT internet and DMZ recover. Internal servers unreachable (by design). | |
 | 9.4a | Unplug DSW2 Gi1/0/11 (DSW2 <-> ASA E1/4) only | DSW2 track 10 Down; `show standby brief`: DSW1 Active for all four VLANs; HR internet recovers, still through the ASA (E1/3) | |
-| 9.4b | Power off the PA | ASA `show route 0.0.0.0` via R1 `.109`; HR/IT internet recovers (R1 still NATs). DMZ down (by design) | |
-| 9.6 | Power off R1 (or unplug R1 G0/0/0) | PA/ASA default moves to R2 `.91`; HR `tracert -d 8.8.8.8` shows `172.17.10.94`; R2 `show ip nat translations` shows `129.126.142.185`. From outside, `curl -k https://129.126.142.189` works; the name doesn't (lab DNS points at ISP1) | |
+| 9.4b | Unplug PA eth1/3 (PA <-> ASA E1/1) | ASA `show ospf neighbor` loses `6.6.6.6`; ASA `show route 0.0.0.0` via R1 `.110` (E1/5, `wan-backup2`); HR/IT internet recovers (R1 still NATs). DMZ unreachable from the user VLANs (by design) | |
+| 9.6 | Unplug R1 G0/0/0 (ISP1 link; `show track 1` on R1 goes Down, R1 stops originating the default) | PA/ASA default moves to R2 `.91`; HR `tracert -d 8.8.8.8` shows `172.17.10.94`; R2 `show ip nat translations` shows `129.126.142.185`. From outside, `curl -k https://129.126.142.189` works; the name doesn't (lab DNS points at ISP1) | |
+| 9.6a | Unplug R1 G0/0/1 **and** G0/1/1 (R1 cut off from the PA and the ASA, as if R1 had died) | Same result as 9.6: default moves to R2, internet recovers through ISP2 | |
+| 9.6b | During 9.6 or 9.6a, from the outside laptop: `curl -k -m 5 https://129.126.142.189` and `ssh -p 2222 <user>@129.126.142.185` | Both work through R2 (uRPF and `WAN-IN` on R2 don't block them) | |
 | 9.5 | Restore; re-run 0.1, 0.3, 0.5, 0.6, 0.19, 2.1 | Baseline (default back on R1) | |
+| 9.7 | After **every** restore: `show ip ospf neighbor` on R1, R2, DSW1, DSW2; `show ospf neighbor` on the ASA; `show routing protocol ospf neighbor` on the PA | Same neighbour counts as before (R1/R2/DSWs 3, ASA 5, PA 5), all FULL with MD5 | |
+| 9.8 | After restoring 9.4a / 9.4: `show standby brief` on both DSWs | DSW1 Active 23/46, DSW2 Active 61/67 again (preempt) | |
 
 ---
 
-## Stage 10: Final hardening re-test (last step)
+## Stage 10: Final hardening re-test (run before Stage 9 and Stages 11-14)
 
 1. Remove the temporary rules (HANDOVER.md 8.4) if not already done, and run 8.5 and 8.9.
 2. Remove the temporary ICMP permits on DSW1 and DSW2 (marked `TODO (FINAL HARDENING)`):
@@ -360,9 +375,237 @@ One at a time, restore after each. Rows 9.2-9.4b are caused physically (unplug a
 
 ---
 
+## Stage 11: AAA (TACACS+ and local fallback)
+
+Run from VM102 (`.44`) and repeat a few rows from VM106 (`.45`). Passwords are in `plan.md`. Users: `bigDonkBonkAdmin` (privilege 15) and `donkBonkEng1` / `donkBonkEng2` (engineers: show, ping, traceroute, interface shutdown / no shutdown). Never run the "refused" commands as the admin.
+
+### 11A: Matrix (TACACS up)
+
+For every device in the table, run these four checks:
+
+1. **Admin:** `ssh bigDonkBonkAdmin@<mgmt ip>`. IOS: `show privilege` says level 15. ASA: `show curpriv` says level 15. PA: `show system info` works and `configure` is accepted.
+2. **Engineer, allowed:** `ssh donkBonkEng1@<mgmt ip>`. IOS: `show ip interface brief`, `show ip route`, `ping <mgmt ip>`. ASA: `show route`, `show ospf neighbor`. PA: `show system info`.
+3. **Engineer, refused:** IOS: `reload`, `write erase`, `router ospf 1`, `ip access-list extended TEST`, `username x privilege 15 secret y`. ASA: `configure terminal`, `show running-config`, `reload`. PA: any `set ...` command and `commit`. Each is rejected (command authorization failed, or the parser view refuses it).
+4. **Wrong password:** one attempt as `donkBonkEng2` with a wrong password is rejected.
+
+| ID | Device | Mgmt IP | Result |
+|----|--------|---------|--------|
+| 11.1 | R1 | 172.16.0.33 | |
+| 11.2 | R2 | 172.16.0.34 | |
+| 11.3 | DSW1 | 172.16.0.35 | |
+| 11.4 | DSW2 | 172.16.0.36 | |
+| 11.5 | SW1 | 172.16.0.37 | |
+| 11.6 | SW2 | 172.16.0.38 | |
+| 11.7 | SW3 | 172.16.0.39 | |
+| 11.8 | SW4 | 172.16.0.40 | |
+| 11.9 | PA | 172.16.0.41 | |
+| 11.10 | ASA | 172.16.0.42 | |
+
+| ID | Test | Expected | Result |
+|----|------|----------|--------|
+| 11.11 | VM102 and VM106: `sudo grep donkBonkEng1 /var/log/tac_plus.acct \| tail -20` after 11.1-11.10 | Each login and each executed command is listed with the user, the device IP and a timestamp | |
+| 11.12 | VM102: `sudo tail -30 /var/log/tac_plus.log` | The refused commands from check 3 appear as authorization denials | |
+| 11.13 | R1: `test aaa group tac-group donkBonkEng1 <pw> legacy` | `User successfully authenticated` | |
+| 11.14 | Repeat checks 1 and 2 on two devices from VM106 | Same as from VM102 | |
+
+### 11B: TACACS down (local fallback)
+
+**Keep a console session open on the device under test before stopping anything.** The ASA command authorization falls back to LOCAL when TACACS is unreachable (P13), so test it last. Find the service name with `systemctl list-units | grep -i tac` (shown here as `tac_plus`).
+
+| ID | Test | Expected | Result |
+|----|------|----------|--------|
+| 11.20 | VM102: `sudo systemctl stop tac_plus`. SSH to R1 as `bigDonkBonkAdmin` | Login works through VM106 (`.45`), a few seconds slower. R1 `show tacacs` shows `.44` not responding | |
+| 11.21 | Also stop tac_plus on VM106. SSH to R1 as `bigDonkBonkAdmin` | After the timeout (about 5-10 s per server) the local account logs in | |
+| 11.22 | Same on DSW1 and SW1, and on the console of each | Local login works | |
+| 11.23 | Same on the PA | Local login works (`AUTH-TACACS` then `AUTH-LOCAL` in `SEQ-ADMIN`) | |
+| 11.24 | Same on the ASA, then run `show version` and `configure terminal` | Admin works (privilege 15). If a command is refused, from the console run `no aaa authorization command TACACS LOCAL`, note it here, and restore it afterwards | |
+| 11.25 | Log in as `donkBonkEng1` locally on R1 | Lands in the `eng-view` parser view: `show` works, `reload` and `configure terminal` + `router ospf 1` are refused | |
+| 11.26 | PA: 5 wrong passwords for `donkBonkEng2` | Account locked for 5 minutes; `bigDonkBonkAdmin` still logs in. Check with `show log system subtype equal auth` | |
+| 11.27 | ASA (TACACS still stopped so LOCAL is used): 6 wrong passwords for `donkBonkEng2` | `show aaa local user lockout` lists the user. Unlock: `clear aaa local user lockout username donkBonkEng2` | |
+| 11.28 | Restore: `sudo systemctl start tac_plus` on VM102 and VM106. Repeat 11.13 and one admin login on R1 and on the ASA | TACACS login works again | |
+
+---
+
+## Stage 12: Logging and monitoring
+
+Run 12A before Wazuh is involved, so you know the feeds work. Run 12B before 12C.
+
+### 12A: Syslog and NetFlow arrive at `.44` and `.45`
+
+On VM102, then VM106, start a capture and generate the event:
+```
+sudo tcpdump -ni ens18 -A udp port 514
+sudo tcpdump -ni ens18 -c 10 udp port 2055
+```
+
+| ID | Device | Generate the event | Expected | Result |
+|----|--------|--------------------|----------|--------|
+| 12.1 | R1, R2, DSW1, DSW2 | `configure terminal`, then `end` | A `%SYS-5-CONFIG_I` line from `.33`, `.34`, `.35`, `.36` arrives on **both** `.44` and `.45` | |
+| 12.2 | SW1-SW4 | Same | Lines from `.37`-`.40` on both | |
+| 12.3 | ASA | `configure terminal`, then `end` | An ASA message (for example `%ASA-5-111008` / `111010`) from `.42` on both | |
+| 12.4 | DSW1 | From STAFF-PC: `Test-NetConnection 172.16.0.74 -Port 445` | `%SEC-6-IPACCESSLOGP ... ACL_STAFF_IN denied` in `show logging` on DSW1 and on `.44` | |
+| 12.5 | R1 | From the outside laptop: `ssh 172.17.9.93` | `WAN-IN denied tcp ... eq 22` logged on R1 and arrives at `.44` | |
+| 12.6 | DSW1 | From MGMT-PC (`.46`): `ssh bigDonkBonkAdmin@172.16.0.35` | `list MGMT-ONLY denied 172.16.0.46` logged in `show logging` and arrives at `.44` | |
+| 12.7 | ASA | VM103: `ping 172.16.0.61` (4.15) | `%ASA-4-106023 Deny` in `show logging` and at `.44` | |
+| 12.8 | R1, DSW1 | `show logging` | `Console logging: disabled`; buffer logging at informational; entries from 12.1 present | |
+| 12.9 | R1, R2, DSW1, DSW2 | `show flow exporter statistics`; `show flow monitor bank-flow-monitor cache` | Exporter packets sent increase and no export errors; cache lists flows. (Only these four have a flow monitor.) | |
+| 12.10 | VM102 and VM106 | The `tcpdump ... udp port 2055` capture | NetFlow v9 packets from `.33`-`.36` on both | |
+
+### 12B: PA log forwarding (P20)
+
+The PA has the `SYSLOG-JUMP` profile, but nothing is sent to it until a log-forwarding profile is attached. In `configure` mode (check each keyword with `?` as before; web UI paths are given):
+
+```
+! Objects > Log Forwarding: traffic and threat logs
+set shared log-settings profiles LFP-WAZUH match-list ML-TRAFFIC log-type traffic filter "All Logs" send-syslog SYSLOG-JUMP
+set shared log-settings profiles LFP-WAZUH match-list ML-THREAT log-type threat filter "All Logs" send-syslog SYSLOG-JUMP
+
+! Device > Log Settings: system (includes admin login failures and lockouts) and config logs
+set shared log-settings system match-list ML-SYS filter "All Logs" send-syslog SYSLOG-JUMP
+set shared log-settings config match-list ML-CFG filter "All Logs" send-syslog SYSLOG-JUMP
+
+! Attach the profile to every rule that should be logged
+set rulebase security rules INBOUND-WEB log-setting LFP-WAZUH
+set rulebase security rules INBOUND-DNS log-setting LFP-WAZUH
+set rulebase security rules JUMP-SSH-IN log-setting LFP-WAZUH
+set rulebase security rules INTERNAL-TO-DNS log-setting LFP-WAZUH
+set rulebase security rules INTERNAL-TO-WEB log-setting LFP-WAZUH
+set rulebase security rules IT-TO-JUMP-SSH log-setting LFP-WAZUH
+set rulebase security rules HR-IT-INTERNET log-setting LFP-WAZUH
+set rulebase security rules TXN-INTERNET-TIMED log-setting LFP-WAZUH
+set rulebase security rules DMZ-OUTBOUND-NTP log-setting LFP-WAZUH
+set rulebase security rules DNS-SVR-FORWARD log-setting LFP-WAZUH
+set rulebase security rules DENY-ALL log-setting LFP-WAZUH
+
+! DoS rule (Slowloris) and the zones (zone-protection scan/flood logs)
+set rulebase dos rules DOS-DMZ-SERVERS log-setting LFP-WAZUH
+set zone outside network log-setting LFP-WAZUH
+set zone dmz network log-setting LFP-WAZUH
+validate full
+commit
+```
+Web UI equivalents: Security / DoS Protection rule > Actions > Log Forwarding; Network > Zones > Log Setting; Device > Log Settings. The `ALLOW-OSPF` rule is left out on purpose (it has `log-end no`).
+
+Syslog leaves the PA over its management port (`172.16.0.41`), which is in the OOB subnet with `.44`/`.45`, so no firewall rule is needed.
+
+| ID | Test | Expected | Result |
+|----|------|----------|--------|
+| 12.11 | `show config running \| match LFP-WAZUH` | Profile, both match lists and every `log-setting` line above | |
+| 12.12 | HR browses a site; on VM102 `sudo tcpdump -ni ens18 -A udp port 514 and host 172.16.0.41` | A TRAFFIC line naming rule `HR-IT-INTERNET` | |
+| 12.13 | Outside laptop: `printf 'SSH-2.0-test\r\n' \| nc -w 3 203.149.210.189 80` (SSH banner on the web port; `INBOUND-WEB` allows only web-browsing and ssl) | `show log traffic` has a deny / reset entry for rule `DENY-ALL` (application `ssh` or `unknown-tcp`), and the TRAFFIC line arrives at `.44` | |
+| 12.14 | Outside laptop: `nmap -sS -Pn -p 1-1000 203.149.210.189` (this blocks your source for 300 s) | `show log threat` has scan entries; THREAT lines arrive at `.44` | |
+| 12.15 | PA: one failed admin login, then `commit` | A SYSTEM line (auth failure) and a CONFIG line arrive at `.44` | |
+
+### 12C: Wazuh
+
+| ID | Test | Expected | Result |
+|----|------|----------|--------|
+| 12.20 | Manager: `<remote>` block for syslog (below) is active; `sudo ss -ulpn \| grep 514` | Manager listens on udp/514 | |
+| 12.21 | Wazuh dashboard, events filtered by source | Log lines from `.33`-`.42` appear, and the PA lines from 12B decode (check one with `sudo /var/ossec/bin/wazuh-logtest`) | |
+| 12.22 | Manager: `sudo /var/ossec/bin/agent_control -l` | Agents on VM100, 101, 103, 104, 105, 107 (and the jump hosts) are `Active` | |
+| 12.23 | VM103 (internal server): `nc -zv <manager DMZ IP> 1514` and `1515` | Succeeds (needs the P17 rules on the ASA and the PA) | |
+| 12.24 | Three wrong SSH passwords to the jump host from outside | An SSH authentication-failure alert in Wazuh | |
+| 12.25 | Err-disable a user port (`shutdown` / `no shutdown` on an access port) | The `%LINK` / `%PM` events appear in Wazuh | |
+
+Manager side, for the syslog feed from the devices (`/var/ossec/etc/ossec.conf`, then `sudo systemctl restart wazuh-manager`):
+```
+<remote>
+  <connection>syslog</connection>
+  <port>514</port>
+  <protocol>udp</protocol>
+  <allowed-ips>172.16.0.32/28</allowed-ips>
+</remote>
+```
+Devices send to both `.44` and `.45`. If the manager runs on only one of them, the other copy is simply not collected.
+
+---
+
+## Stage 13: Time window, DNS exposure and self-audit
+
+### 13A: TXN window, live (covers 8.1 and 8.2)
+
+Use `DEMO-DAY.md` section 1 to change the window on **both** firewalls, and restore the final window afterwards. Test by IP, from the VM105 console.
+
+| ID | Test | Expected | Result |
+|----|------|----------|--------|
+| 13.1 | Window covers now. VM105: `curl -k -m 5 -s -o /dev/null -w "%{http_code}\n" https://8.8.8.8` | A status code (200 or 302). ASA `show access-list SERVER_IN \| include TXN` hit counts rise; PA `show session all filter source 172.16.0.76` lists the session | |
+| 13.2 | Window ends before now (set it two hours ahead). Same `curl` | Times out (`000`) | |
+| 13.3 | Any window. VM103 and VM104: same `curl` | Fails (only VM105 is allowed out) | |
+| 13.4 | Restore the final window. ASA `show time-range TXN-WINDOW`; PA `show config running \| match TXN-WINDOW` | Both show the same days and hours | |
+
+### 13B: DNS exposure (from the outside laptop, against `203.149.210.190`)
+
+| ID | Test | Expected | Result |
+|----|------|----------|--------|
+| 13.10 | `dig @203.149.210.190 google.com` | `status: REFUSED` (no recursion in the external view) | |
+| 13.11 | `dig @203.149.210.190 gruppesechs.sitict.net +short` | `203.149.210.189` | |
+| 13.12 | `dig @203.149.210.190 gruppesechs.sitict.net AXFR` | `Transfer failed` or `REFUSED` | |
+| 13.13 | `dig @203.149.210.190 version.bind chaos txt +short` | `"not disclosed"` | |
+| 13.14 | `for i in $(seq 1 100); do dig @203.149.210.190 gruppesechs.sitict.net +short +tries=1 +time=1; done \| sort \| uniq -c` | Fewer than 100 answers (rate limiting at 10 per second). On VM101, `sudo journalctl -u named \| grep -i limit` may show the limiting messages | |
+| 13.15 | HR PC: `nslookup gruppesechs.sitict.net` | `172.16.0.82` (internal view still works) | |
+
+### 13C: Self-audit with nmap
+
+The scanner in 13.20 triggers PA scan protection and blocks your source for 300 seconds. Run it from a laptop you can wait out, or after the other outside tests.
+
+| ID | From | Command | Expected | Result |
+|----|------|---------|----------|--------|
+| 13.20 | Outside laptop | `nmap -Pn -sS -p 22,23,53,80,443,2222 203.149.210.185-190` | Open only: `.185` 2222, `.189` 80 and 443, `.190` 53. Everything else `filtered` | |
+| 13.21 | Outside laptop | `nmap -Pn -sU -p 53 203.149.210.190` | `53/udp` open or `open\|filtered` | |
+| 13.22 | Outside laptop | `ping 203.149.210.189`, `ping 203.149.210.186` | No reply | |
+| 13.23 | HR or IT PC | `nmap -Pn -p 22,23,80,443,8006 172.16.0.33-46` | All `filtered` (OOB is not reachable from users) | |
+| 13.24 | VM102 | `nmap -Pn -p 22,23,80,443,830 172.16.0.33-42` | Cisco devices: only `22` open (no `23`, `80`, `443`). ASA: `22` only. PA: `22` and `443` | |
+| 13.25 | VM102 | `nmap -Pn -p 22,8006 172.16.0.43` | `22` and `8006` open (Proxmox) | |
+
+---
+
+## Stage 14: Attack readiness
+
+Done before the attacks in `DEMO-DAY.md` section 3, so each scene starts clean and the claim "normal users are not affected" is measured, not assumed.
+
+### 14A: Normal use under attack
+
+Baseline first, with no attack running. From the HR laptop, 20 requests to the web server, and 20 from the outside laptop to `.189`:
+```
+for i in $(seq 1 20); do curl -k -s -o /dev/null -w "%{http_code} %{time_total}\n" https://172.16.0.82; done
+for i in $(seq 1 20); do curl -k -s -o /dev/null -w "%{http_code} %{time_total}\n" https://203.149.210.189; done
+```
+On a Windows laptop use PowerShell instead:
+```
+1..20 | % { curl.exe -k -s -o NUL -w "%{http_code} %{time_total}`n" https://172.16.0.82 }
+```
+Note the typical `time_total`. Repeat both loops while each attack runs.
+
+| ID | Attack running | Expected (second outside laptop and HR) | Result |
+|----|---------------|------------------------------------------|--------|
+| 14.1 | SYN flood to `203.149.210.189:443` (Scene 4) | All 20 requests return `200`; times stay close to the baseline. If they are much slower, lower the flood rate for the demo | |
+| 14.2 | Slowloris to `https://gruppesechs.sitict.net` (Scene 5) | All 20 return `200`; `show dos-protection rule DOS-DMZ-SERVERS` on the PA shows hits; the DoS log line arrives at `.44` | |
+| 14.3 | macof or dhcpig on one access port (Scene 1) | A second PC on **another port of the same switch** keeps its lease and its ping to the gateway | |
+| 14.4 | Brute force against `.185:2222` (Scene 6) | A legitimate login from IT (`ignoreip`) still works; after the ban, a legitimate login from a different outside address works | |
+
+### 14B: Side effects and reset
+
+Do these between runs of a scene, and before the demo.
+
+| Attack | Side effect | Reset |
+|--------|-------------|-------|
+| MAC flooding (macof) | Port err-disabled; sticky MACs fill the port | `clear port-security sticky interface Gi1/0/N`, then `shutdown` / `no shutdown` (or wait 300 s). Check `show port-security interface Gi1/0/N` |
+| BPDU injection | Port err-disabled (`bpduguard`) | `shutdown` / `no shutdown`. Check `show spanning-tree inconsistentports` |
+| DHCP starvation (dhcpig) | Port err-disabled (`dhcp-rate-limit`); possibly a few scope leases used | `shutdown` / `no shutdown`; `clear ip dhcp snooping binding *`. On VM107, if the scope is exhausted: `sudo systemctl stop isc-dhcp-server`, `sudo truncate -s 0 /var/lib/dhcp/dhcpd.leases`, `sudo systemctl start isc-dhcp-server` (clients renew) |
+| ARP spoofing (bettercap) | Port may err-disable (`arp-inspection` rate) | `shutdown` / `no shutdown`. On the victim: `arp -d *` |
+| DTP, double tagging | None | None |
+| Spoofed source (hping) | WAN-IN counters and log lines | Optional: `clear ip access-list counters WAN-IN` on R1 for a clean demo |
+| nmap scan | PA blocks the scanner's source for 300 s | Wait 300 s, or remove the entry in Monitor > Block IP List, or scan from another address |
+| SYN flood | Counters on the PA; sessions time out by themselves | Nothing. Do **not** `clear session all`: it drops every user session |
+| Slowloris | Open connections time out after 10 s; nginx 429s | Nothing |
+| SSH brute force | fail2ban bans the attacker for 15 min | `sudo fail2ban-client set sshd unbanip <ip>` |
+| Admin lockout | PA account locked 5 min; ASA local account locked | ASA: `clear aaa local user lockout username <user>`. PA: wait 5 min, or unlock from another superuser |
+
+---
+
 ## Results summary
 
-| Stage | Status (6 Nov) |
+| Stage | Status (6 Nov; Stages 9-14 updated 7 Nov) |
 |-------|----------------|
 | 0 Infrastructure | All pass on the 5 Nov design, except 0.18 (NAT tables not shown) |
 | 1 Addressing | Pass (reported) |
@@ -374,4 +617,8 @@ One at a time, restore after each. Rows 9.2-9.4b are caused physically (unplug a
 | 7 OOB | Pass. 7.16 skipped (no sudo). 7.12: P6 still to apply on the live R1 |
 | 8 Server outbound | 8.4 to 8.9 done. 8.1 to 8.3 not run. Temporary install rules need re-adding for Wazuh |
 | 9 Redundancy | Not run |
-| 10 Hardening | Not started |
+| 10 Hardening | Not started (next, before Stage 9) |
+| 11 AAA | Not run |
+| 12 Logging and monitoring | Not run (PA log forwarding to be configured first, P20) |
+| 13 Time window, DNS exposure, self-audit | Not run |
+| 14 Attack readiness | Not run |

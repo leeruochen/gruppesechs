@@ -14,9 +14,10 @@ This file is the full context for continuing on another device. Chat history fro
 - **Open now:**
   1. ~~Jump host can't reach R1's OOB address~~ **Resolved 4 Nov** (P19). Remaining Stage 7 work: SSH from both jump hosts to every device, check NTP on the remaining devices.
   2. ~~ATM DHCP lease~~ **Working 4 Nov** (`.52`).
-  3. **Temporary internet rules for installs are still in place** (8.4). Remove once nothing else needs installing (Wazuh?).
-  4. Most deny tests in `TEST-PLAN.md` haven't been run.
-  5. **Hardening (7 Nov):** done and in the macros, except a few live-only follow-ups listed in section 11.4 (switch NTP auth and R1's ICMP line still to paste live, PA DoS rule 6.3 committed live but still to uncomment in `pa440.ttl`, DSW temporary ICMP permits still to remove). Inbound from the internet hasn't been re-tested since the hardening.
+  3. **Temporary internet rules for installs are still in place** (8.4). Keep them until the Wazuh agents are installed on the internal servers, then remove them (section 12, D1).
+  4. Stages 0-8 of `TEST-PLAN.md` are done (6 Nov). Stages 9-14 are open.
+  5. **Hardening (7 Nov):** done, live and in the macros (section 11). Left: R1's redundant ICMP line and the temporary ICMP permits on the DSWs (11.4).
+  6. **Wazuh (7 Nov):** installed on VM102 (`172.16.0.44`) over SSH. The dashboard has not been opened yet, log sources and agents are not wired. **Continue at section 12.**
 
 ---
 
@@ -234,8 +235,9 @@ Every static route in the macros has a `REQUIRED` or `OPTIONAL` comment.
 | Firewall-to-DSW links (fix #23) | routed `/30`s, ASA E1/4 + PA eth1/6/7 up, no PA `.78` / ASA `.86` | same (all 9 OSPF links FULL, 7 Nov) | None |
 | DSW default route | none (OSPF default only) | OSPF default via own ASA link (`.97` / `.101`), 7 Nov | None |
 | R1 `WAN-IN` `permit icmp any 203.149.210.184 0.0.0.7` | removed 7 Nov (redundant: the next line permits all IP to the block) | **still present** | `ip access-list extended WAN-IN` / `no permit icmp any 203.149.210.184 0.0.0.7` |
-| SW1-SW4 NTP authentication | present (7 Nov) | **not applied** (plain `ntp server` lines) | Paste section 11.4 on each switch, check `show ntp associations detail` |
-| PA DoS rule `DOS-DMZ-SERVERS` (`HARDENING.md` 6.3) | commented out | **committed live 6 Nov** (corrected `set profiles dos-protection ...` path) | Uncomment the block in `pa440.ttl` and fix the path, so a rebuild keeps it |
+| SW1-SW4 NTP authentication | present (7 Nov) | applied (7 Nov) | None |
+| PA DoS rule `DOS-DMZ-SERVERS` (`HARDENING.md` 6.3) | present (uncommented, corrected path) | committed live | None |
+| PA log forwarding `LFP-WAZUH` (`TEST-PLAN.md` 12B) | **not in `pa440.ttl` yet** | entered 7 Nov; the zone lines were rejected, commit not confirmed | Finish and commit it (section 12, B2), then add to `pa440.ttl` |
 | ASA command authorization | on | on (both TACACS servers working) | None |
 | R1 extra `0.0.0.0/0 .94 250` | absent | present (harmless) | None |
 | ASA live `INSIDE_IN` | `DSW-SVIS` bootps line only | old `DSWs` bootps line also present (redundant) | Optional: `no access-list INSIDE_IN extended permit udp object-group DSWs object DHCP-SVR eq bootps` |
@@ -270,9 +272,9 @@ Full matrix, results and diagnosis steps are in `TEST-PLAN.md`. Summary (4 Nov):
 | P6 | R1 `WAN-IN` SSH/Telnet denies reference `.94` | Change to `.93` in `r1.ttl` and live |
 | P11 | DHCP renewals from client IPs denied by ASA `INSIDE_IN` | Optional: permit udp from user subnets to `DHCP-SVR eq bootps` |
 | P13 | ~~TACACS lockout risk once tac_plus answers~~ | **Resolved 7 Nov.** Both TACACS servers work; ASA command authorization re-enabled. Still keep a console open when rebuilding a device |
-| P14 | ~~Clocks not synced until chrony runs on `.44/.45`~~ | **Resolved 7 Nov.** Authenticated NTP on R1, R2, DSWs, ASA, PA (`.44` `*`, `.45` candidate). SW1-SW4: sync works, auth still to paste live (section 11.4) |
+| P14 | ~~Clocks not synced until chrony runs on `.44/.45`~~ | **Resolved 7 Nov.** Authenticated NTP on R1, R2, DSWs, ASA, PA (`.44` `*`, `.45` candidate). SW1-SW4: authenticated too (7 Nov) |
 | P15 | Internal servers have no DNS after the temporary rules go | Decide if needed |
-| P17 | Wazuh agents on internal servers can't reach `.84/.85` | ASA `SERVER_IN` + PA `inside -> dmz` permits for tcp/1514-1515 |
+| P17 | Wazuh agents on internal servers can't reach `.84/.85` | ASA `SERVER_IN` + PA `inside -> dmz` permits for tcp/1514-1515 (commands in section 12, C1) |
 
 ---
 
@@ -695,18 +697,9 @@ Troubleshooting seen on 4 Nov: `duplicate default server` (another site still en
 
 ---
 
-## 9. Next steps (in order)
+## 9. Next steps
 
-0. ~~Apply the 5 Nov redesign~~ **Live** (all OSPF neighbours match, 7 Nov). Still to confirm: the VM101 internal view (8.10), then run `TEST-PLAN.md` Stage 6 (inbound) and 9.
-1. ~~Fix the jump host -> R1 OOB problem (P19)~~ Resolved. **Finish Stage 7**: NTP works on R1 (check the other devices with `show ntp associations`), then SSH to every device from both jump hosts.
-2. ~~Confirm fixes #18 and #19 live on both DSWs~~ **Confirmed 4 Nov**; ATM got `.52`. Still to do: ATM -> Accounts (`TEST-PLAN.md` 4.9) and re-check HSRP (0.3).
-3. **Add DSW1 Gi1/0/21** (management port) to `dsw1.ttl` once confirmed.
-4. ~~Set up chrony, then tac_plus~~ **Done.** Wazuh is still open; install it while the temporary rules are up.
-5. **Remove the temporary rules** (8.4) and run `TEST-PLAN.md` 8.5 and 8.9.
-6. **Run the remaining tests** (Stages 2-6 deny tests, Stage 8 Txn window).
-7. **Fix P6** (R1 `WAN-IN` `.94` -> `.93`) and decide on P3, P11, P15.
-8. **Final hardening (Stage 10):** mostly done (section 11). Left: the live follow-ups in 11.4, then remove the temporary ICMP permits on both DSWs (`HARDENING.md` 3.3, live **and** in `dsw1.ttl` / `dsw2.ttl`), then re-test inbound (Stage 6) from outside.
-9. **Demo day:** set the final TXN-WINDOW (ASA `time-range`, PA `schedule`). Exact commands and checks are in `DEMO-DAY.md`.
+Superseded by **section 12**, the single ordered checklist for the next lab session. The old list is done or folded into it: the 5 Nov redesign is live, Stages 0-8 were run (6 Nov), chrony and tac_plus are done, and the hardening is in section 11.
 
 ---
 
@@ -1067,7 +1060,7 @@ Commands are in `HARDENING.md` (section numbers below refer to it). Device outpu
 | 1.1 Login brute-force (`login block-for`) | **Dropped** | Quiet mode replaces `MGMT-ONLY` with an ACL that has no `vrf-also`, so it blocks **all** SSH over the OOB VRF, `.44` included. CoPP was tried as a replacement and also dropped (never applied live). Brute-force protection comes from fail2ban (11), ASA `max-fail` (5.3) and PA admin-lockout (6.5) |
 | 1.2 Misc IOS hygiene | Skipped | Commands were rejected on the lab images |
 | 1.3 NTP auth + NTP ACL | Done: for all devices | Key `bigBoyNTPkey` |
-| 2.1 WAN-IN anti-spoofing | Done: R1, R2 | R1's redundant `permit icmp any 203.149.210.184 0.0.0.7` removed from `r1.ttl`; still live (11.4) |
+| 2.1 WAN-IN anti-spoofing | Done: R1, R2 | R1's redundant `permit icmp any 203.149.210.184 0.0.0.7` removed from `r1.ttl`; check it is gone on the live R1 (11.4) |
 | 2.2 uRPF, no unreachables, no CDP on WAN | Done: R1, R2 | |
 | 2.3 Null0 for the public block | Done: R1, R2 | |
 | 3.1 HSRP MD5 | Done: DSW1, DSW2 | |
@@ -1113,29 +1106,98 @@ Commands are in `HARDENING.md` (section numbers below refer to it). Device outpu
 
 ### 11.4 Still to do (live)
 
-1. **R1:** remove the redundant ICMP line so live matches `r1.ttl` (the next line permits all IP to the block anyway):
+Switch NTP authentication, the PA DoS rule in `pa440.ttl` and the inbound re-test are done. Left from the hardening:
+
+1. **R1:** remove the redundant ICMP line so live matches `r1.ttl` (the next line permits all IP to the block anyway). Skip if already done:
    ```
    ip access-list extended WAN-IN
     no permit icmp any 203.149.210.184 0.0.0.7
    ```
-2. **SW1-SW4: NTP authentication** (in the macros since 7 Nov, not yet live). One switch first, check, then the rest:
-   ```
-   ntp authentication-key 1 md5 bigBoyNTPkey
-   ntp trusted-key 1
-   ntp authenticate
-   ntp server 172.16.0.44 key 1 prefer
-   ntp server 172.16.0.45 key 1
-   ip access-list standard NTP-SERVERS
-    permit host 172.16.0.44
-    permit host 172.16.0.45
-    deny any
-   exit
-   ntp access-group peer NTP-SERVERS
-   ntp logging
-   ```
-   Check `show ntp associations detail`; rollback if it won't sync: `no ntp authenticate`.
-3. **PA 6.3:** committed live 6 Nov with the corrected `set profiles dos-protection ...` path. **Uncomment the block in `pa440.ttl`** (currently commented out) and correct the path there, so a PA rebuild keeps the DoS rule. Verify with `show config running | match DOS-PER-CLIENT`.
-4. **Inbound re-test from outside** (`TEST-PLAN.md` Stage 6): `https://203.149.210.189`, `nslookup gruppesechs.sitict.net 203.149.210.190`, `ssh -p 2222 <user>@203.149.210.185`. Zone protection, uRPF and the WAN-IN denies all sit on this path.
-5. **3.3:** remove the temporary ICMP permits on both DSWs once testing is finished (live and in `dsw1.ttl` / `dsw2.ttl`).
+2. **3.3:** remove the temporary ICMP permits on both DSWs (live **and** in `dsw1.ttl` / `dsw2.ttl`). Commands are in `TEST-PLAN.md` Stage 10.
 
-2,3,4 ARE DONE...(remove them.)
+Everything else is in section 12.
+
+---
+
+## 12. Lab session checklist (continue here)
+
+**State at the end of the remote session (7 Nov):**
+- Stages 0-8, the hardening, switch NTP authentication, the PA DoS rule in the macro and the inbound re-test are done.
+- Wazuh is installed on VM102 (`172.16.0.44`) over SSH. The dashboard (`https://172.16.0.44`) has not been opened: a normal browser can't reach the OOB network.
+- The PA log-forwarding config (`LFP-WAZUH`, `TEST-PLAN.md` 12B) was entered on 7 Nov. The two zone lines were rejected. Whether the rest was committed is not known.
+
+Tick each step as you go. Test IDs refer to `TEST-PLAN.md`.
+
+### A. Open the Wazuh dashboard
+- [ ] **A1** In the lab, plug a laptop into **DSW1 Gi1/0/21** (VLAN 99), set `172.16.0.46/28`, gateway `172.16.0.33`, and browse `https://172.16.0.44` (accept the certificate warning). Don't use Proxmox LAN 4 (section 4).
+  - From outside the lab, tunnel through the jump host: `ssh -p 2222 -L 8443:localhost:443 <user>@203.149.210.185`, then browse `https://localhost:8443`.
+- [ ] **A2** If the page doesn't load, on VM102: `sudo systemctl status wazuh-dashboard`, `sudo ss -tlnp | grep 443`, and check `server.host` in `/etc/wazuh-dashboard/opensearch_dashboards.yml` (it must be `0.0.0.0` or `172.16.0.44`, not `127.0.0.1`). Check the host firewall (`sudo ufw status`).
+- [ ] **A3** Get the admin password the installer generated: `sudo tar -O -xvf wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt` (run where you ran the installer). Record it in your private notes, not in the repo.
+
+### B. Wire the log sources into Wazuh
+- [ ] **B1** On VM102, add this inside `<ossec_config>` in `/var/ossec/etc/ossec.conf`, then `sudo systemctl restart wazuh-manager` and check `sudo ss -ulpn | grep 514`:
+  ```
+  <remote>
+    <connection>syslog</connection>
+    <port>514</port>
+    <protocol>udp</protocol>
+    <allowed-ips>172.16.0.32/28</allowed-ips>
+  </remote>
+  ```
+  The devices send to both `.44` and `.45`. Only the manager on `.44` is collected.
+- [ ] **B2** PA: confirm and commit the log forwarding.
+  ```
+  run show config running | match LFP-WAZUH
+  set zone outside network log-setting LFP-WAZUH
+  set zone dmz network log-setting LFP-WAZUH
+  validate full
+  commit
+  ```
+  Expected in the first output: the profile, 11 security rules, the DoS rule and (after the zone lines) both zones. If a zone line is rejected, type `set zone outside network ?` or use Network > Zones > Log Setting in the web UI. Re-enter any rule line that is missing.
+- [ ] **B3** Run `TEST-PLAN.md` 12.1-12.10 (syslog and NetFlow reach `.44` and `.45`) and 12.11-12.15 (PA logs). Careful: 12.14 blocks your source for 300 s.
+- [ ] **B4** In the dashboard, confirm events from `.33`-`.42` and decoded PA lines (12.21).
+
+### C. Install the agents
+Keep the temporary internet rules (8.4) up until this step is finished: the agents download from the internet.
+
+- [ ] **C1** Open the agent path (P17). The manager's address for servers is its DMZ IP `172.16.0.84`.
+  ```
+  (ASA, configure terminal) The permit must sit ABOVE the SERVERS -> INTERNAL deny (INTERNAL is 172.16.0.0/25 and includes the DMZ):
+  access-list SERVER_IN line 1 extended permit tcp object SERVERS object JUMP-SVR range 1514 1515
+
+  (PA, configure)
+  set service WAZUH-AGENT protocol tcp port 1514-1515
+  set rulebase security rules WAZUH-AGENTS from inside to dmz source SERVERS destination JUMP-SVR source-user any category any application any service WAZUH-AGENT action allow log-end yes log-setting LFP-WAZUH
+  move rulebase security rules WAZUH-AGENTS before DENY-ALL
+  validate full
+  commit
+  ```
+  Test from VM103: `nc -zv 172.16.0.84 1514` and `1515`.
+- [ ] **C2** Install agents on VM100, 101, 103, 104, 105, 107 (server address `172.16.0.84`) and VM106 (server address `172.16.0.44`). In the dashboard use *Deploy new agent* and paste the commands it generates. VM102 runs the manager's local agent.
+- [ ] **C3** Run 12.20-12.25: `sudo /var/ossec/bin/agent_control -l` shows every agent Active, and a failed SSH login produces an alert.
+
+### D. Clean up (after C2 is finished)
+- [ ] **D1** Remove the temporary internet rules (the commands are in 8.4: ASA `SERVER_IN` lines, PA `TEMP-SVR-UPDATES`, and the two `NAT-SOURCES` lines on R1 and R2 if you added them). Then run 8.5 and 8.9.
+- [ ] **D2** Remove the temporary ICMP permits on both DSWs (11.4 item 2), live and in the macros. Run `TEST-PLAN.md` Stage 10 (10.1-10.5).
+- [ ] **D3** R1: remove the redundant ICMP line (11.4 item 1) if it is still live.
+
+### E. Remaining tests (in this order)
+- [ ] **E1** Re-check the open items from the 6 Nov run: 6.5 (loop for unused public IPs, the Null0 route is now live), 7.12 (R1 `WAN-IN` P6, `.94` to `.93`), 6.9, 0.18.
+- [ ] **E2** Stage 9, redundancy: unplug tests only, after D2.
+- [ ] **E3** Stage 11, AAA: keep a console session open on the device you test (ASA first rule: P13).
+- [ ] **E4** Stage 13: live TXN window (also covers 8.1-8.2), DNS exposure, nmap self-audit. 13.20 blocks your source for 300 s, so run it last from that laptop.
+- [ ] **E5** Stage 14: take the curl timing baseline, then check the reset steps for each attack.
+
+### F. Put what is now live into the macros
+- [ ] **F1** `pa440.ttl`: the `LFP-WAZUH` profile, the match lists, every `log-setting` line (rules, DoS rule, zones) and the `WAZUH-AGENTS` service and rule. Put `WAZUH-AGENTS` before `DENY-ALL`.
+- [ ] **F2** `firepower1010.ttl`: the Wazuh permit in `SERVER_IN`, above the `SERVERS -> INTERNAL` deny.
+- [ ] **F3** Fill in the Result columns in `TEST-PLAN.md`, and update sections 6 and 11 here.
+
+### G. Decisions still open
+- [ ] P3 / P15: the Txn server and internal servers have no DNS. Decide if they need it.
+- [ ] P11: DHCP renewals from client IPs are denied by the ASA (low impact).
+
+### H. Before demo day
+- [ ] Save a `show running-config` from every device to a file (no `write memory`; a reload wipes the Cisco devices and the ASA).
+- [ ] Walk through `DEMO-DAY.md` section 3: the pre-flight table, then each scene once.
+- [ ] On the day: set the final TXN window on both firewalls (`DEMO-DAY.md` section 1).
