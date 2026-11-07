@@ -2,7 +2,7 @@
 
 **Rack:** 4E (`gruppesechs.sitict.net`)
 **Topology:** Full PTSO (Parallel Topologically, Serial Operationally)
-**Last updated:** 5 November 2026 (firewall-link redesign, second ISP and NAT on the routers are in the macros, not yet applied live: see section 10)
+**Last updated:** 7 November 2026 (hardening from `HARDENING.md` applied live and added to the macros: see section 11. The 5 Nov redesign in section 10 is live.)
 
 This file is the full context for continuing on another device. Chat history from the AI assistant does not transfer between machines, so everything needed is written here. Test results live in `TEST-PLAN.md`.
 
@@ -16,6 +16,7 @@ This file is the full context for continuing on another device. Chat history fro
   2. ~~ATM DHCP lease~~ **Working 4 Nov** (`.52`).
   3. **Temporary internet rules for installs are still in place** (8.4). Remove once nothing else needs installing (Wazuh?).
   4. Most deny tests in `TEST-PLAN.md` haven't been run.
+  5. **Hardening (7 Nov):** done and in the macros, except a few live-only follow-ups listed in section 11.4 (switch NTP auth and R1's ICMP line still to paste live, PA DoS rule 6.3 undecided, DSW temporary ICMP permits still to remove). Inbound from the internet hasn't been re-tested since the hardening.
 
 ---
 
@@ -25,6 +26,10 @@ This file is the full context for continuing on another device. Chat history fro
 configs/
 ├── HANDOVER.md            <- this file
 ├── TEST-PLAN.md           <- connectivity test matrix with results (Stages 0-10)
+├── TOPOLOGY.md            <- topology and failover table
+├── HARDENING.md           <- hardening commands by device (section numbers used in section 11)
+├── hardening-changes.md   <- what was actually applied live, with device output (7 Nov)
+├── DEMO-DAY.md            <- demo-day commands (TXN window etc.)
 ├── plan.md                <- original design document (requirements source)
 ├── supermicro setup.md    <- Proxmox host/bridge/VM notes (see warnings in 8.2)
 ├── revision 2.md          <- lecture/lab notes (Lab 3.1 jump host, AAA, NTP, DoS)
@@ -139,6 +144,20 @@ Check on a router with `show ip nat translations` and `show ip nat statistics`. 
 3. **R1 default must be `.94`**, never `.93` (R1's own IP).
 4. **Proxmox LAN 4 (`eno6`, bond primary) must be cabled to DSW1 Gi1/0/24.** Plugging a laptop into LAN 4 makes the bond send all OOB traffic to the laptop. Use DSW1 Gi1/0/21 (VLAN 99, `.46/28`) for a management laptop instead.
 
+### Shared keys and lockouts (hardening, 7 Nov)
+
+| Purpose | Key | Where it must match |
+|---|---|---|
+| NTP (key id 1, MD5) | `bigBoyNTPkey` | `/etc/chrony/chrony.keys` on **both** VM102 and VM106 (`1 MD5 bigBoyNTPkey`), all Cisco devices, ASA, PA |
+| OSPF MD5 (key id 1) | `GsOspf2026` | Both ends of every OSPF link (R1, R2, DSW1, DSW2, ASA, PA profile `OSPF-MD5`) |
+| HSRP MD5 | `GsHsrp2026` | DSW1 and DSW2, VLANs 23/46/61/67 |
+
+(`HARDENING.md` lists `GsNtpKey2026` for NTP. That value was **not** used; the real key is `bigBoyNTPkey`.)
+
+- **ASA:** local accounts lock after 5 failed logins (`aaa local authentication attempts max-fail 5`; privilege 15 is exempt). Unlock: `clear aaa local user lockout username <user>`. Command authorization (`aaa authorization command TACACS LOCAL`) is **on** again: keep a console session open when rebuilding the ASA in case tac_plus is down.
+- **PA:** admin lockout after 5 failed logins for 5 minutes; idle timeout 10 minutes.
+- **SW1-SW4:** err-disabled ports (port-security, BPDU guard, DHCP rate limit, DAI) recover by themselves after 300 s. Sticky MACs never age out: free slots with `clear port-security sticky interface <if>`.
+
 ### Lab image quirk: `Mgmt-vrf`
 The school image puts some router ports into the factory `Mgmt-vrf`. On R1/R2 G0/1/1 this kept the old R1-R2 link out of OSPF (G0/1/1 is now each router's ASA link). Both macros run `no vrf forwarding Mgmt-vrf` before setting the IP. That command deletes the interface IP, so the IP must be set straight after. Correct IPs: R1 `.109`, R2 `.113`. Check other router ports (e.g. R1 G0/1/0 for the OOB problem) for the same quirk.
 
@@ -175,9 +194,11 @@ The school image puts some router ports into the factory `Mgmt-vrf`. On R1/R2 G0
 | 20 | Inbound HTTPS to the web server had no NAT (P4) | `NAT-WEB-HTTPS` | `pa440.ttl`, `pa440_cleanup.ttl` |
 | 21 | PA public IPs (.186/.187) didn't match plan.md / ASA (.189/.190) | `PUB-WEB` .189, `PUB-DNS` .190 | `pa440.ttl` |
 | 22 | Users couldn't resolve other racks' names (only on the lab DNS) | VM101 forwards to ICT DNS `172.18.4.32`; PA `ICT-DNS` added to `DNS-SVR-FORWARD` | `pa440.ttl`, `pa440_cleanup.ttl`, VM101 `named.conf.options` |
-| 23 | Backup links needed manual `no shutdown` (not allowed in the demo); ASA failure was a full outage (P8) | 5 Nov redesign: firewall-to-DSW links are routed `/30`s (ASA E1/3 + E1/4, PA eth1/6 + eth1/7), all up; server-subnet backups (PA `.78`, ASA `.86`) removed; HSRP and default route track each DSW's own ASA link. **Not applied live yet** (section 10) | all firewall and DSW macros |
-| 25 | Single ISP; failover depended on a PA-side static default | Second ISP on R2 (`172.17.10.93/30`, block `129.126.142.184/29`); R1-R2 link replaced by R1 <-> ASA E1/5; NAT moved to R1/R2; PA NAT rules, `DEFAULT-OUT` and ASA standby PAT removed. **Not applied live yet** (section 10) | `r1.ttl`, `r2.ttl`, `firepower1010.ttl`, `pa440.ttl`, `pa440_cleanup.ttl` |
+| 23 | Backup links needed manual `no shutdown` (not allowed in the demo); ASA failure was a full outage (P8) | 5 Nov redesign: firewall-to-DSW links are routed `/30`s (ASA E1/3 + E1/4, PA eth1/6 + eth1/7), all up; server-subnet backups (PA `.78`, ASA `.86`) removed; HSRP and default route track each DSW's own ASA link. Applied live (OSPF neighbours match the new design, checked 7 Nov) | all firewall and DSW macros |
+| 25 | Single ISP; failover depended on a PA-side static default | Second ISP on R2 (`172.17.10.93/30`, block `129.126.142.184/29`); R1-R2 link replaced by R1 <-> ASA E1/5; NAT moved to R1/R2; PA NAT rules, `DEFAULT-OUT` and ASA standby PAT removed. Applied live (OSPF neighbours match the new design, checked 7 Nov) | `r1.ttl`, `r2.ttl`, `firepower1010.ttl`, `pa440.ttl`, `pa440_cleanup.ttl` |
 | 26 | After the rebuild, HR/IT had no internet: the PA had no default route. PAN-OS OSPF rejects default routes by default ("Reject Default Route"); the old `DEFAULT-OUT` static had hidden this. The ASA/DSWs still learned R1's default through the PA, so traffic died at the PA (6 Nov) | `set network virtual-router default protocol ospf reject-default-route no` | `pa440.ttl` |
+| 27 | Every device showed `.45` as `insane` / `reach 0` after NTP auth was turned on (7 Nov). VM106's `chrony.keys` had no key, so its replies were unsigned and rejected. Devices `prefer` `.44`, so nothing looked wrong until the `.45` line was checked | `1 MD5 bigBoyNTPkey` added to VM106's `chrony.keys`, chrony restarted | VM106 |
+| 28 | ASA lost `authenticated` on `.44` after `no ntp authentication-key 1 md5 GsNtpKey2026`: that command deletes key 1 **whatever value is typed**, which removed the new key too | Re-enter `ntp authentication-key 1 md5 bigBoyNTPkey`. To change a key, just enter the new line | `firepower1010.ttl` (comment) |
 | 24 | HSRP `track 1 interface Vlan100` never fired (Po5 kept the SVI up), and decrement 20 tied 110 with 90, so DSW2's higher IP kept 61/67 | `track 10` (IP SLA to own ASA link), decrement 30 | `dsw1.ttl`, `dsw2.ttl` |
 
 ### Why `R1# ping 8.8.8.8` fails (don't re-diagnose)
@@ -210,8 +231,12 @@ Every static route in the macros has a `REQUIRED` or `OPTIONAL` comment.
 | DSW HSRP permit (fix #18) | present | applied on both (seen in `ACL_ATM_IN`, 4 Nov) | None (check `ACL_STAFF_IN` too) |
 | DSW DHCP peer-reply permit (fix #19) | present | applied on both (seen in `ACL_ATM_IN`, 4 Nov); ATM lease works | None |
 | DSW1 Gi1/0/21 management port (VLAN 99) | in macro (6 Nov, section 9b) | configured live (4 Nov) | None |
-| Firewall-to-DSW links (fix #23) | routed `/30`s, ASA E1/4 + PA eth1/6/7 up, no PA `.78` / ASA `.86` | old shared VLAN 100, ASA E1/4 + PA eth1/6/7/8 down, ASA Vlan92 shut | Apply with section 10 |
-| DSW default route | none (OSPF default only) | plain static via .97 | Reload removes it (the plain static does **not** fail over) |
+| Firewall-to-DSW links (fix #23) | routed `/30`s, ASA E1/4 + PA eth1/6/7 up, no PA `.78` / ASA `.86` | same (all 9 OSPF links FULL, 7 Nov) | None |
+| DSW default route | none (OSPF default only) | OSPF default via own ASA link (`.97` / `.101`), 7 Nov | None |
+| R1 `WAN-IN` `permit icmp any 203.149.210.184 0.0.0.7` | removed 7 Nov (redundant: the next line permits all IP to the block) | **still present** | `ip access-list extended WAN-IN` / `no permit icmp any 203.149.210.184 0.0.0.7` |
+| SW1-SW4 NTP authentication | present (7 Nov) | **not applied** (plain `ntp server` lines) | Paste section 11.4 on each switch, check `show ntp associations detail` |
+| PA DoS rule `DOS-DMZ-SERVERS` (`HARDENING.md` 6.3) | commented out | unknown (committed with the fixed `set profiles ...` path, or deleted) | `show config running \| match DOS-PER-CLIENT`; if present, uncomment in `pa440.ttl` |
+| ASA command authorization | on | on (both TACACS servers working) | None |
 | R1 extra `0.0.0.0/0 .94 250` | absent | present (harmless) | None |
 | ASA live `INSIDE_IN` | `DSW-SVIS` bootps line only | old `DSWs` bootps line also present (redundant) | Optional: `no access-list INSIDE_IN extended permit udp object-group DSWs object DHCP-SVR eq bootps` |
 | Temporary ICMP permits on DSW `ACL_HR_IN` / `ACL_IT_IN` | present, `TODO (FINAL HARDENING)` | present | Remove at Stage 10 |
@@ -231,9 +256,10 @@ Full matrix, results and diagnosis steps are in `TEST-PLAN.md`. Summary (4 Nov):
 | 4 Internal servers | File share, Staff -> Accounts pass; ATM and deny tests pending |
 | 5 DMZ | Web + DNS from HR/IT pass (incl. other racks' names); jump/deny tests pending |
 | 6 Inbound | HTTPS, DNS, jump SSH pass; HTTP (6.1), lab-resolver name (6.3a), deny tests pending |
-| 7 OOB | **Blocked: jump host can't reach R1 .33** |
+| 7 OOB | Unblocked (P19). SSH from VM102 to R1/DSWs/ASA/PA works; NTP authenticated on R1, DSWs, ASA, PA (7 Nov). SSH from VM106 to every device still to test |
 | 8 Server outbound | Installs + DNS forwarding pass; post-cleanup tests pending |
-| 9, 10 | Not started |
+| 9 | Not started |
+| 10 Hardening | Mostly done 7 Nov (section 11). After OSPF auth: all neighbours FULL, defaults via the primary path, HR/IT ping 8.8.8.8 from DSW2's SVIs, HR -> web tcp/443 open, VM102 DNS/NTP to the internet OK. Inbound from the internet not re-tested |
 
 ### Open problems (numbers match `TEST-PLAN.md` Part 2)
 
@@ -243,8 +269,8 @@ Full matrix, results and diagnosis steps are in `TEST-PLAN.md`. Summary (4 Nov):
 | P3 | Txn server can't reach DNS `.83` (`SERVER_IN` line 1 denies first) | Decide if Txn needs names; if so add a permit above line 1 |
 | P6 | R1 `WAN-IN` SSH/Telnet denies reference `.94` | Change to `.93` in `r1.ttl` and live |
 | P11 | DHCP renewals from client IPs denied by ASA `INSIDE_IN` | Optional: permit udp from user subnets to `DHCP-SVR eq bootps` |
-| P13 | TACACS lockout risk once tac_plus answers | Console session open; `test aaa group tac-group <user> <pw> legacy` before relying on it |
-| P14 | ~~Clocks not synced until chrony runs on `.44/.45`~~ | **Fixed 4 Nov** for R1/R2 (chrony on both TACACS VMs). Confirm on DSWs, SWs, ASA (`show ntp status`) and PA (`show ntp`) |
+| P13 | ~~TACACS lockout risk once tac_plus answers~~ | **Resolved 7 Nov.** Both TACACS servers work; ASA command authorization re-enabled. Still keep a console open when rebuilding a device |
+| P14 | ~~Clocks not synced until chrony runs on `.44/.45`~~ | **Resolved 7 Nov.** Authenticated NTP on R1, R2, DSWs, ASA, PA (`.44` `*`, `.45` candidate). SW1-SW4: sync works, auth still to paste live (section 11.4) |
 | P15 | Internal servers have no DNS after the temporary rules go | Decide if needed |
 | P17 | Wazuh agents on internal servers can't reach `.84/.85` | ASA `SERVER_IN` + PA `inside -> dmz` permits for tcp/1514-1515 |
 
@@ -661,8 +687,9 @@ Troubleshooting seen on 4 Nov: `duplicate default server` (another site still en
 
 | Item | Notes |
 |------|-------|
-| **chrony** (NTP for the OOB devices) | **DONE 4 Nov (VM102 checked; confirm VM106 config matches).** Check it's serving with `sudo ss -ulpn \| grep chronyd` (must show `0.0.0.0:123`), and `chronyc -N sources`. After editing the config, restart chrony and confirm port 123 is open; on a Cisco device, reset a stuck association with `no ntp server vrf OOB 172.16.0.44` then `ntp server vrf OOB 172.16.0.44 prefer`. Devices picking `.45` over `.44` is fine when VM102 syncs from VM106 (one stratum lower); add `noselect` to each VM's `server <other TACACS>` line to make both prefer the internet pool. Setup: **on both VM102 and VM106** (devices use `.44` prefer + `.45`). In `/etc/chrony/chrony.conf`: comment out the Ubuntu `pool ...` lines, add `pool 0.sg.pool.ntp.org iburst maxsources 4`, `server 172.16.0.45 iburst` (on VM106: `.44`), `allow 172.16.0.32/28`, `local stratum 10 orphan`; `sudo systemctl restart chrony`. Upstream NTP leaves via ens19 (PA `DMZ-OUTBOUND-NTP`, router `NAT-SOURCES`); devices query over ens18 (OOB). Tests: `TEST-PLAN.md` 7.13-7.16. Fixes P14. |
-| **tac_plus** | Config in `plan.md` ("TACACS config"). **Read P13 first.** Keep a console session open on each device, then test with `test aaa group tac-group bigDonkBonkAdmin <pw> legacy`. Re-enable ASA `aaa authorization command TACACS LOCAL` only after it works. |
+| **chrony** (NTP for the OOB devices) | **DONE 4 Nov; NTP auth added 7 Nov.** Both VMs need `1 MD5 bigBoyNTPkey` in `/etc/chrony/chrony.keys` (owner `root:_chrony`, mode 640) and `keyfile /etc/chrony/chrony.keys` in `chrony.conf`; a missing key makes every device reject that server (fix #27). Check it's serving with `sudo ss -ulpn \| grep chronyd` (must show `0.0.0.0:123`), and `chronyc -N sources`. After editing the config, restart chrony and confirm port 123 is open; on a Cisco device, reset a stuck association with `no ntp server vrf OOB 172.16.0.44` then `ntp server vrf OOB 172.16.0.44 prefer`. Devices picking `.45` over `.44` is fine when VM102 syncs from VM106 (one stratum lower); add `noselect` to each VM's `server <other TACACS>` line to make both prefer the internet pool. Setup: **on both VM102 and VM106** (devices use `.44` prefer + `.45`). In `/etc/chrony/chrony.conf`: comment out the Ubuntu `pool ...` lines, add `pool 0.sg.pool.ntp.org iburst maxsources 4`, `server 172.16.0.45 iburst` (on VM106: `.44`), `allow 172.16.0.32/28`, `local stratum 10 orphan`; `sudo systemctl restart chrony`. Upstream NTP leaves via ens19 (PA `DMZ-OUTBOUND-NTP`, router `NAT-SOURCES`); devices query over ens18 (OOB). Tests: `TEST-PLAN.md` 7.13-7.16. Fixes P14. |
+| **tac_plus** | **DONE (both VMs, 7 Nov).** Config in `plan.md` ("TACACS config"). ASA `aaa authorization command TACACS LOCAL` is re-enabled live and in the macro. Test after changes with `test aaa group tac-group bigDonkBonkAdmin <pw> legacy`. |
+| **SSH hardening + fail2ban** | **DONE (7 Nov, `HARDENING.md` 11).** `/etc/ssh/sshd_config.d/99-hardening.conf`; fail2ban `sshd` jail ignores `172.16.0.32/28` and `172.16.0.64/29`. Check: `sudo fail2ban-client status sshd`. |
 | **Wazuh** | Manager needs roughly 4 GB RAM. Install while the 8.4 temporary rules are up. Agents on internal servers need P17 rules (ASA `SERVER_IN` + PA `inside -> dmz`, tcp/1514-1515). |
 | **NetFlow analyzer** | Devices already export to `.44`/`.45` udp/2055 over the OOB VRF. |
 
@@ -670,20 +697,22 @@ Troubleshooting seen on 4 Nov: `duplicate default server` (another site still en
 
 ## 9. Next steps (in order)
 
-0. **Apply the 5 Nov redesign** (section 10: firewall links, second ISP, NAT on the routers) and the VM101 internal view (8.10), then run `TEST-PLAN.md` Stage 0, 6 and 9.
+0. ~~Apply the 5 Nov redesign~~ **Live** (all OSPF neighbours match, 7 Nov). Still to confirm: the VM101 internal view (8.10), then run `TEST-PLAN.md` Stage 6 (inbound) and 9.
 1. ~~Fix the jump host -> R1 OOB problem (P19)~~ Resolved. **Finish Stage 7**: NTP works on R1 (check the other devices with `show ntp associations`), then SSH to every device from both jump hosts.
 2. ~~Confirm fixes #18 and #19 live on both DSWs~~ **Confirmed 4 Nov**; ATM got `.52`. Still to do: ATM -> Accounts (`TEST-PLAN.md` 4.9) and re-check HSRP (0.3).
 3. **Add DSW1 Gi1/0/21** (management port) to `dsw1.ttl` once confirmed.
-4. **Set up chrony, then tac_plus (carefully), then Wazuh**, while the temporary rules are still up.
+4. ~~Set up chrony, then tac_plus~~ **Done.** Wazuh is still open; install it while the temporary rules are up.
 5. **Remove the temporary rules** (8.4) and run `TEST-PLAN.md` 8.5 and 8.9.
 6. **Run the remaining tests** (Stages 2-6 deny tests, Stage 8 Txn window).
 7. **Fix P6** (R1 `WAN-IN` `.94` -> `.93`) and decide on P3, P11, P15.
-8. **Final hardening (Stage 10):** remove the temporary ICMP permits on both DSWs, re-enable ASA command authorization (after TACACS works), re-test.
+8. **Final hardening (Stage 10):** mostly done (section 11). Left: the live follow-ups in 11.4, then remove the temporary ICMP permits on both DSWs (`HARDENING.md` 3.3, live **and** in `dsw1.ttl` / `dsw2.ttl`), then re-test inbound (Stage 6) from outside.
 9. **Demo day:** set the final TXN-WINDOW (ASA `time-range`, PA `schedule`). Exact commands and checks are in `DEMO-DAY.md`.
 
 ---
 
 ## 10. Applying the 5 Nov firewall-link redesign to the live devices
+
+> **Status 7 Nov: applied.** All 9 OSPF links of the new design are FULL. Keep this section only as a reference for how the live migration was done.
 
 The macros describe the new design. A device rebuilt from its macro after a reload gets it automatically. To change the **running** devices without a reload, use the steps below. Do it in one session; expect short interruptions while OSPF reconverges. Untested on the devices: check each step's output before moving on.
 
@@ -1024,3 +1053,64 @@ Some `no` lines may report "does not exist" if that piece was never applied live
 
 ### 10.6 Verify
 `TEST-PLAN.md` Stage 0 (0.3-0.6b, 0.9-0.11, 0.13-0.18), then 2.1 (HR internet), 4.x (HR file share), 5.x (HR -> DMZ DNS/web), Stage 6 (inbound), then Stage 9. Do the VM101 internal view (8.10) in the same session, or HR/IT lose the website by name.
+
+---
+
+## 11. Hardening (7 Nov)
+
+Commands are in `HARDENING.md` (section numbers below refer to it). Device output from applying them is in `hardening-changes.md`. Everything marked "done" is live **and** in the macros, so a reloaded Cisco device or ASA gets it back from its `.ttl`. The keys are in section 4.
+
+### 11.1 Status by section
+
+| HARDENING.md | Status | Notes |
+|---|---|---|
+| 1.1 Login brute-force (`login block-for`) | **Dropped** | Quiet mode replaces `MGMT-ONLY` with an ACL that has no `vrf-also`, so it blocks **all** SSH over the OOB VRF, `.44` included. CoPP was tried as a replacement and also dropped (never applied live). Brute-force protection comes from fail2ban (11), ASA `max-fail` (5.3) and PA admin-lockout (6.5) |
+| 1.2 Misc IOS hygiene | Skipped | Commands were rejected on the lab images |
+| 1.3 NTP auth + NTP ACL | Done: for all devices | Key `bigBoyNTPkey` |
+| 2.1 WAN-IN anti-spoofing | Done: R1, R2 | R1's redundant `permit icmp any 203.149.210.184 0.0.0.7` removed from `r1.ttl`; still live (11.4) |
+| 2.2 uRPF, no unreachables, no CDP on WAN | Done: R1, R2 | |
+| 2.3 Null0 for the public block | Done: R1, R2 | |
+| 3.1 HSRP MD5 | Done: DSW1, DSW2 | |
+| 3.3 Remove temporary ICMP permits | **Open** | Stage 10, after testing |
+| 4.1-4.4 Access switches (DHCP rate limit, errdisable recovery, DAI validate, storm control, no CDP) | Done: SW1-SW4 | |
+| 4.5 IPSG mac-check | Not done (optional) | |
+| 5.1 ASA MPF + threat detection | Done | `show service-policy interface inside` |
+| 5.2 ASA uRPF on `server` | Skipped | |
+| 5.3 ASA local lockout | Done | Command authorization also re-enabled |
+| 5.4 ASA NTP auth | Done | See fix #28 before changing the key |
+| 6.1, 6.2 PA zone protection (outside, dmz) | Done | |
+| 6.3 PA DoS per-client limit | Done | DoS profiles are `set profiles dos-protection ...`,|
+| 6.4 PA vlan.92 OSPF passive | Done | |
+| 6.5 PA admin lockout + idle timeout | Done | |
+| 6.6 PA NTP auth | Done | `show ntp`: `symmetric-key`, `synched` |
+| 7 OSPF MD5 on all 9 links | Done | Key `GsOspf2026`, PA profile `OSPF-MD5` on eth1/3, eth1/6, eth1/7, vlan.10 |
+| 8 chrony keys | Done: VM102, VM106 | Fix #27 |
+| 9 BIND (version, no AXFR, RRL) | Done: VM101 | |
+| 10 nginx Slowloris limits | Done: VM100 | A raw TCP connection is closed after ~10 s (`client_header_timeout`): expected |
+| 11 sshd hardening + fail2ban | Done: VM102, VM106 | |
+
+### 11.2 Verification (run after any rebuild)
+
+| Device | Command | Expected |
+|---|---|---|
+| R1, R2, DSW1, DSW2 | `show ip ospf neighbor` | R1: ASA `5.5.5.5` (G0/1/1), R2 + PA (G0/0/1). R2: same pattern. DSW1/2: peer DSW (Vlan100), PA (Gi1/0/12), ASA (Gi1/0/11). All FULL |
+| same | `show ip ospf interface \| include line protocol\|authentication\|key` | `Cryptographic authentication enabled`, `Youngest key id is 1` on every OSPF link |
+| ASA | `show ospf neighbor`, `show ospf interface \| include line protocol\|authentication\|key` | 5 neighbours FULL; auth on outside, wan-backup, wan-backup2, inside, inside2 |
+| PA | `show routing protocol ospf neighbor`, `show config running \| match authentication` | 5 neighbours full; `OSPF-MD5` on 4 interfaces |
+| All Cisco + ASA | `show ntp associations detail` | `.44` `authenticated`, `sane`, `our_master`; `.45` `authenticated`, reach climbing to 377 |
+| PA | `show ntp` | `synched`, `authentication-type: symmetric-key` (`autokey` = 6.6 not committed) |
+| DSW1, DSW2 | `show standby brief` | DSW1 Active 23/46, DSW2 Active 61/67 |
+| ASA / DSWs / PA | `show route 0.0.0.0` / `show ip route 0.0.0.0` / `show routing route type ospf` | ASA via `.105`, DSW1 via `.97`, DSW2 via `.101`, PA via `.90` (never a cost-500 bypass) |
+| DSW2 (remote stand-in for an HR/IT PC) | `ping 8.8.8.8 source Vlan61`, `ping 8.8.8.8 source Vlan67`, `telnet 172.16.0.82 443 /source-interface Vlan61` | 5/5, 5/5, `Open` |
+
+### 11.3 Lessons from applying it
+
+- **OSPF auth, one link at a time:** do both ends within the 40 s dead timer and the adjacency never drops. A PA commit takes longer, so PA links drop for about a minute; do the cost-500 backups first so traffic has a path. Interface commands must be entered under `interface ...`, not at `(config)#`.
+- **Commit pending PA changes before starting OSPF auth**, otherwise every commit pushes them too.
+- **NTP:** a device that `prefer`s `.44` stays synced even when `.45` is broken, so always read the `.45` line as well. After a server comes back, `insane` / `reject` with low reach is normal for ~10 minutes.
+- **ASA NTP:** `no ntp authentication-key 1 ...` deletes key 1 regardless of the value typed (fix #28).
+
+### 11.4 Still to do (live)
+
+1. **Inbound re-test from outside** (`TEST-PLAN.md` Stage 6): `https://203.149.210.189`, `nslookup gruppesechs.sitict.net 203.149.210.190`, `ssh -p 2222 <user>@203.149.210.185`. Zone protection, uRPF and the WAN-IN denies all sit on this path.
+2. **3.3:** remove the temporary ICMP permits on both DSWs once testing is finished (live and in `dsw1.ttl` / `dsw2.ttl`).
