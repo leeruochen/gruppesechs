@@ -16,7 +16,7 @@ This file is the full context for continuing on another device. Chat history fro
   2. ~~ATM DHCP lease~~ **Working 4 Nov** (`.52`).
   3. **Temporary internet rules for installs are still in place** (8.4). Remove once nothing else needs installing (Wazuh?).
   4. Most deny tests in `TEST-PLAN.md` haven't been run.
-  5. **Hardening (7 Nov):** done and in the macros, except a few live-only follow-ups listed in section 11.4 (switch NTP auth and R1's ICMP line still to paste live, PA DoS rule 6.3 undecided, DSW temporary ICMP permits still to remove). Inbound from the internet hasn't been re-tested since the hardening.
+  5. **Hardening (7 Nov):** done and in the macros, except a few live-only follow-ups listed in section 11.4 (switch NTP auth and R1's ICMP line still to paste live, PA DoS rule 6.3 committed live but still to uncomment in `pa440.ttl`, DSW temporary ICMP permits still to remove). Inbound from the internet hasn't been re-tested since the hardening.
 
 ---
 
@@ -235,7 +235,7 @@ Every static route in the macros has a `REQUIRED` or `OPTIONAL` comment.
 | DSW default route | none (OSPF default only) | OSPF default via own ASA link (`.97` / `.101`), 7 Nov | None |
 | R1 `WAN-IN` `permit icmp any 203.149.210.184 0.0.0.7` | removed 7 Nov (redundant: the next line permits all IP to the block) | **still present** | `ip access-list extended WAN-IN` / `no permit icmp any 203.149.210.184 0.0.0.7` |
 | SW1-SW4 NTP authentication | present (7 Nov) | **not applied** (plain `ntp server` lines) | Paste section 11.4 on each switch, check `show ntp associations detail` |
-| PA DoS rule `DOS-DMZ-SERVERS` (`HARDENING.md` 6.3) | commented out | unknown (committed with the fixed `set profiles ...` path, or deleted) | `show config running \| match DOS-PER-CLIENT`; if present, uncomment in `pa440.ttl` |
+| PA DoS rule `DOS-DMZ-SERVERS` (`HARDENING.md` 6.3) | commented out | **committed live 6 Nov** (corrected `set profiles dos-protection ...` path) | Uncomment the block in `pa440.ttl` and fix the path, so a rebuild keeps it |
 | ASA command authorization | on | on (both TACACS servers working) | None |
 | R1 extra `0.0.0.0/0 .94 250` | absent | present (harmless) | None |
 | ASA live `INSIDE_IN` | `DSW-SVIS` bootps line only | old `DSWs` bootps line also present (redundant) | Optional: `no access-list INSIDE_IN extended permit udp object-group DSWs object DHCP-SVR eq bootps` |
@@ -1113,5 +1113,29 @@ Commands are in `HARDENING.md` (section numbers below refer to it). Device outpu
 
 ### 11.4 Still to do (live)
 
-1. **Inbound re-test from outside** (`TEST-PLAN.md` Stage 6): `https://203.149.210.189`, `nslookup gruppesechs.sitict.net 203.149.210.190`, `ssh -p 2222 <user>@203.149.210.185`. Zone protection, uRPF and the WAN-IN denies all sit on this path.
-2. **3.3:** remove the temporary ICMP permits on both DSWs once testing is finished (live and in `dsw1.ttl` / `dsw2.ttl`).
+1. **R1:** remove the redundant ICMP line so live matches `r1.ttl` (the next line permits all IP to the block anyway):
+   ```
+   ip access-list extended WAN-IN
+    no permit icmp any 203.149.210.184 0.0.0.7
+   ```
+2. **SW1-SW4: NTP authentication** (in the macros since 7 Nov, not yet live). One switch first, check, then the rest:
+   ```
+   ntp authentication-key 1 md5 bigBoyNTPkey
+   ntp trusted-key 1
+   ntp authenticate
+   ntp server 172.16.0.44 key 1 prefer
+   ntp server 172.16.0.45 key 1
+   ip access-list standard NTP-SERVERS
+    permit host 172.16.0.44
+    permit host 172.16.0.45
+    deny any
+   exit
+   ntp access-group peer NTP-SERVERS
+   ntp logging
+   ```
+   Check `show ntp associations detail`; rollback if it won't sync: `no ntp authenticate`.
+3. **PA 6.3:** committed live 6 Nov with the corrected `set profiles dos-protection ...` path. **Uncomment the block in `pa440.ttl`** (currently commented out) and correct the path there, so a PA rebuild keeps the DoS rule. Verify with `show config running | match DOS-PER-CLIENT`.
+4. **Inbound re-test from outside** (`TEST-PLAN.md` Stage 6): `https://203.149.210.189`, `nslookup gruppesechs.sitict.net 203.149.210.190`, `ssh -p 2222 <user>@203.149.210.185`. Zone protection, uRPF and the WAN-IN denies all sit on this path.
+5. **3.3:** remove the temporary ICMP permits on both DSWs once testing is finished (live and in `dsw1.ttl` / `dsw2.ttl`).
+
+2,3,4 ARE DONE...(remove them.)

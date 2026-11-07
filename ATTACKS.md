@@ -323,9 +323,11 @@ attack
 
 attack
 - use slowhttptest
-- sudo slowhttptest -c 1000 https://gruppesechs.sitic.net
-- attack is preventend, similar logic to tcp syn flood
-- using mpf to defend
+- sudo slowhttptest -c 1000 -H -u https://gruppesechs.sitict.net
+- attack is prevented: PA DOS-PER-CLIENT caps one source IP at 50 sessions
+  (DOS-DMZ-SERVERS, committed 6 Nov) and nginx closes clients that stall their
+  headers past 10 s (client_header_timeout). ASA MPF per-client-max covers the
+  internal portals (VM104/105)
 
 ---
 
