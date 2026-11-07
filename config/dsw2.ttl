@@ -26,6 +26,10 @@ sendln 'service password-encryption'
 wait '#'
 sendln 'service timestamps log datetime msec localtime'
 wait '#'
+; Syslog: no console logging (keeps macro/console output clean). Logs still go to
+; the RAM buffer (show logging) and the syslog servers.
+sendln 'no logging console'
+wait '#'
 sendln 'clock timezone SGT 8 0'
 wait '#'
 
@@ -869,6 +873,8 @@ wait '#'
 
 sendln 'line con 0'
 wait '#'
+sendln 'logging synchronous'
+wait '#'
 sendln 'login authentication CONSOLE'
 wait '#'
 sendln 'exec-timeout 10 0'
@@ -877,6 +883,8 @@ sendln 'exit'
 wait '#'
 
 sendln 'line vty 0 2'
+wait '#'
+sendln 'logging synchronous'
 wait '#'
 sendln 'access-class MGMT-ONLY in vrf-also'
 wait '#'
@@ -942,6 +950,12 @@ wait '#'
 sendln 'logging host 172.16.0.45 vrf OOB'
 wait '#'
 sendln 'logging trap informational'
+wait '#'
+; Local copy in RAM if the syslog servers/OOB are down; logs to SSH sessions
+; after 'terminal monitor' (exec command, typed per session, not in the macro).
+sendln 'logging buffered 64000 informational'
+wait '#'
+sendln 'logging monitor informational'
 wait '#'
 
 ; End Phase 1 config

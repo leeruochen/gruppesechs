@@ -1088,6 +1088,7 @@ Commands are in `HARDENING.md` (section numbers below refer to it). Device outpu
 | 9 BIND (version, no AXFR, RRL) | Done: VM101 | |
 | 10 nginx Slowloris limits | Done: VM100 | A raw TCP connection is closed after ~10 s (`client_header_timeout`): expected |
 | 11 sshd hardening + fail2ban | Done: VM102, VM106 | |
+| Syslog (from the lab notes, not in `HARDENING.md`) | Done: all IOS devices + ASA | IOS: `no logging console`, `logging buffered 64000 informational`, `logging monitor informational`, `logging synchronous` on con 0 and vty 0 2. ASA: `logging buffered informational`, `logging monitor informational`. `logging trap` stays `informational`: level 4 would drop OSPF/HSRP changes and ACL `log` hits. Use `terminal monitor` per SSH session to watch logs live. Check: `show logging` |
 
 ### 11.2 Verification (run after any rebuild)
 

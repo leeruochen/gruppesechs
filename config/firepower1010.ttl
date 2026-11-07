@@ -732,6 +732,12 @@ sendln 'logging timestamp'
 wait '#'
 sendln 'logging trap informational'
 wait '#'
+; Local copy in RAM (show logging) and logs to SSH sessions after 'terminal monitor'.
+; Console logging is off by default on the ASA; no 'logging synchronous' exists.
+sendln 'logging buffered informational'
+wait '#'
+sendln 'logging monitor informational'
+wait '#'
 ; NOTE: "logging host interface conflicts with route table entry" warning is
 ; EXPECTED. The syslog hosts .44/.45 sit in the management interface's own
 ; connected subnet (172.16.0.32/28), so pinning the 'management' interface is
