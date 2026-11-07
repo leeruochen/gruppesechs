@@ -1,6 +1,6 @@
 # Punggol Bank: Network Connectivity Test Plan
 
-**Last updated:** 4 November 2026
+**Last updated:** 6 November 2026
 
 Purpose: confirm every connection `plan.md` requires actually works, and every connection it forbids is actually blocked.
 
@@ -10,7 +10,7 @@ How to use it:
 - Fill in the **Result** column (`PASS` / `FAIL` + date + note).
 - When a row fails, run the device-side check for it. That shows which device dropped the traffic.
 
-**Status at a glance (4 Nov):** all servers are built. Stage 0 passes. Internet, DHCP, DNS (internal, external and other racks' names), the file share, the Accounts portal, the web server (inside and outside, HTTP and HTTPS) and SSH into the jump host from outside have all been seen working. **Open:** the jump host can't reach R1's OOB address (7.1), the ATM DHCP lease after fix #19, and most deny tests haven't been run yet.
+**Status at a glance (6 Nov):** the 5 Nov redesign (routed firewall links, second ISP, NAT on R1/R2) is live and Stages 0 to 7 pass. Stages 1 to 5 were reported as working in full, so their rows are marked "(reported)". Stage 6 passes (6.9 not run), and the internal DNS view is live (HR gets `172.16.0.82`). Stage 7 passes: SSH to every device, NTP on the devices checked, and the MGMT-PC deny. **Open:** the R1 `WAN-IN` fix (P6) on the live router, the possible loop for unused public IPs on R1 (6.5), Stage 8 (8.1 to 8.3 not run; the temporary install rules need re-adding for Wazuh), Stages 9 and 10, and the Txn DNS decision (P3, P15). The final TXN-WINDOW is set on demo day: see `DEMO-DAY.md`.
 
 ---
 
@@ -97,16 +97,16 @@ Found by reading the configs against `plan.md`. Each links to the test that expo
 | P2 | ASA only permitted DHCP relay from `.98/.99` | **FIXED 4 Nov** (`DSW-SVIS` object-group in `INSIDE_IN` / `SERVER_IN`) | 4.10 |
 | P3 | Txn server can't use DNS `.83`: `SERVER_IN` line 1 denies SERVERS -> INTERNAL first | Open | 8.3 |
 | P4 | No NAT for inbound HTTPS to the web server | **FIXED 4 Nov** (`NAT-WEB-HTTPS`) | 6.2 |
-| P5 | Servers had no internet for `apt install`; DNS server couldn't reach forwarders | **Partly fixed.** DNS forwarders permanent (`DNS-SVR-FORWARD`, incl. ICT DNS). Package installs use the **temporary** rules (HANDOVER.md 8.4), still in place | 8.4, 8.9 |
-| P6 | R1 `WAN-IN` SSH/Telnet denies reference `.94` (ISP), not `.93` (R1) | Open (low impact: the final deny still blocks it) | 6.7, 7.12 |
+| P5 | Servers had no internet for `apt install`; DNS server couldn't reach forwarders | **Partly fixed.** DNS forwarders permanent (`DNS-SVR-FORWARD`, incl. ICT DNS). Package installs use the **temporary** rules (HANDOVER.md 8.4). **Not in place after the 5/6 Nov reload**: re-add them while Wazuh is being installed | 8.4, 8.9 |
+| P6 | R1 `WAN-IN` SSH/Telnet denies reference `.94` (ISP), not `.93` (R1) | **Fixed in `r1.ttl` 6 Nov** (confirmed on the live ACL by 7.12). Apply to the running R1: `no 10`, `no 20`, re-add with `.93` | 6.7, 7.12 |
 | P7 | HR <-> IT ping works while the temporary ICMP permits exist | Expected until Stage 10 | 3.5 |
 | P8 | An ASA failure is a full outage (no automatic bypass) | **Redesigned 5 Nov** (PA eth1/6/7 are routed /30s, up, cost 500: users fail over to the PA automatically; internal servers are down by design). Test after the macros are applied | 9.4 |
 | P9 | PA treated `172.16.0.72/29` as connected on dead vlan.69 | **FIXED 4 Nov** (vlan.69 removed from VR and OSPF) | 8.2 |
-| P10 | `ACL_STAFF_IN` / `ACL_ATM_IN` dropped the peer DSW's HSRP hellos; both DSWs Active for VLANs 23/46 | **FIXED 4 Nov** (`permit udp <subnet> host 224.0.0.102 eq 1985`). Re-check 0.3 | 0.3 |
+| P10 | `ACL_STAFF_IN` / `ACL_ATM_IN` dropped the peer DSW's HSRP hellos; both DSWs Active for VLANs 23/46 | **FIXED 4 Nov** (`permit udp <subnet> host 224.0.0.102 eq 1985`). **Confirmed 6 Nov** (0.3 passes) | 0.3 |
 | P11 | DHCP renewals (unicast from client IPs) denied by ASA `INSIDE_IN` | Open (clients fall back to broadcast; slower renewals only) | 1B |
 | P12 | Static HR binding blocked the DHCP lease for the same MAC | **FIXED 4 Nov** (static block removed; OPTIONAL in `sw3.ttl`) | 1.1 |
 | P13 | Lockout risk once tac_plus answers (no fallback to local on a "fail") | Open: read before enabling TACACS | 7.4 |
-| P14 | ASA/PA clocks not synced until chrony runs on `.44/.45` | Open | 8.1, 8.2 |
+| P14 | ASA/PA clocks not synced until chrony runs on `.44/.45` | **Fixed 6 Nov**: R1, R2, SW1, ASA and PA synced to `.44`/`.45`. Other devices reported OK | 8.1, 8.2 |
 | P15 | Internal servers have no DNS once the temporary rules are removed | Open (decide if any internal server needs DNS) | 8.3 |
 | P16 | Jump SSH (`.185:2222`) might not match `JUMP-SSH-IN` after port translation | **Not an issue** (6.4 passed) | 6.4 |
 | P17 | Wazuh/syslog agents on internal servers can't reach `.84/.85` | Open: needs ASA + PA rules before Wazuh agents | n/a |
@@ -119,27 +119,27 @@ Found by reading the configs against `plan.md`. Each links to the test that expo
 
 | ID | Device | Command | Expected | Result |
 |----|--------|---------|----------|--------|
-| 0.1 | DSW1, DSW2 | `show etherchannel summary` | Po1-Po5 `(SU)`, members `(P)`. **Po5 must be up.** | PASS 4 Nov |
-| 0.2 | SW1-SW4 | `show etherchannel summary` | Both uplinks `(SU)` | PASS 4 Nov |
-| 0.3 | DSW1, DSW2 | `show standby brief` | 23/46: DSW1 Active, DSW2 Standby. 61/67: DSW2 Active, DSW1 Standby. No `unknown` standby. | **Re-check** after P10 fix |
-| 0.4 | DSW1, DSW2 | `show ip route 0.0.0.0` | DSW1 `S* via 172.16.0.97`, DSW2 `S* via 172.16.0.101` (5 Nov design) | PASS 4 Nov (old design) |
-| 0.5 | DSW1, DSW2 | `show track 10` | Up on both (required for HSRP and route failover in the 5 Nov design) | |
-| 0.6 | ASA | `show ospf neighbor` | R1 `.109`, R2 `.113`, PA `.105`, DSW1 `.98`, DSW2 `.102`, all FULL | PASS 4 Nov (old design) |
-| 0.6a | DSW1, DSW2 | `show ip ospf neighbor` | ASA (`.97` / `.101`), PA (`.117` / `.121`), other DSW over Vlan100 (`.126` / `.125`), all FULL | |
-| 0.6b | ASA | `show route 172.16.0.56` and `show route 172.16.0.0` | HR via `.102` (DSW2), Staff via `.98` (DSW1) | |
-| 0.7 | ASA | `show route` | `0.0.0.0/0 via 172.16.0.105`; `172.16.0.80/29 via 172.16.0.105` (not connected `dmz`) | PASS 4 Nov |
-| 0.8 | ASA | `show nat` | Empty (no `obj_any`, no standby PAT after 5 Nov) | PASS 4 Nov (obj_any) |
-| 0.9 | PA | `show routing protocol ospf neighbor` | R1 `.90`, R2 `.91`, ASA `.106`, DSW1 `.118`, DSW2 `.122` full | PASS 4 Nov (old design: no DSWs) |
-| 0.10 | PA | `show routing route` | `0.0.0.0/0 via .90` learned by OSPF (no static `DEFAULT-OUT` after 5 Nov); `172.16.0.72/29 via .106` (O2); HR/IT via `.106`, **not** via `.118`/`.122` | PASS 4 Nov |
-| 0.11 | PA | `show interface ethernet1/6`, `1/7` | Link state **up** (5 Nov design), IPs `.117/30`, `.121/30` | PASS 4 Nov (old design: down) |
-| 0.12 | PA | `show running security-policy` | `DENY-ALL` last; `TEMP-SVR-UPDATES` present only while installs are ongoing | PASS 4 Nov |
-| 0.13 | R1 | `show ip route 0.0.0.0` | Only `via 172.17.9.94` | PASS 4 Nov |
-| 0.14 | R1 | `show track` | Track 1 Up (track 2 removed 5 Nov) | PASS 4 Nov |
-| 0.15 | R1 | `show ip ospf neighbor` | PA `.92` + R2 `.91` on G0/0/1, ASA `.110` on G0/1/1, all FULL | PASS 4 Nov (old design: R2 `.110` on G0/1/1) |
-| 0.16 | R1 | `ping 172.17.9.94` | 5/5 | PASS 4 Nov |
-| 0.17 | R2 | `show track 1`; `ping 172.17.10.94`; `show ip ospf neighbor` | Track Up; 5/5; PA `.92` + R1 `.90` on G0/0/1, ASA `.114` on G0/1/1 | |
-| 0.18 | R1, R2 | `show ip nat translations` (with HR browsing) | R1: HR `.6x` -> `203.149.210.185`, plus the static `.189`/`.190`/`.185:2222` entries. R2: only static entries while R1 is up | |
-| 0.19 | PA, ASA, DSW | `show ip route 0.0.0.0` / `show routing route destination 0.0.0.0/0` | Default via R1 (metric ~10 + path), not R2 (50 + path) | |
+| 0.1 | DSW1, DSW2 | `show etherchannel summary` | Po1-Po5 `(SU)`, members `(P)`. **Po5 must be up.** | PASS 6 Nov (Po5 Gi1/0/10 had a loose cable, reseated) |
+| 0.2 | SW1-SW4 | `show etherchannel summary` | Both uplinks `(SU)` | PASS 6 Nov (SW1 seen, SW2-4 reported) |
+| 0.3 | DSW1, DSW2 | `show standby brief` | 23/46: DSW1 Active, DSW2 Standby. 61/67: DSW2 Active, DSW1 Standby. No `unknown` standby. | PASS 6 Nov (DSW1 Active 23/46, DSW2 Active 61/67, real Standby on both; P10 fix confirmed) |
+| 0.4 | DSW1, DSW2 | `show ip route 0.0.0.0` | DSW1 `O*E1` via `172.16.0.97`, DSW2 via `172.16.0.101` (OSPF default from R1; no static route since 5 Nov) | PASS 6 Nov (OSPF default via .97 on DSW1 and .101 on DSW2, metric 40, no static) |
+| 0.5 | DSW1, DSW2 | `show track 10` | Up on both (required for HSRP and route failover in the 5 Nov design) | PASS 6 Nov (Up on both) |
+| 0.6 | ASA | `show ospf neighbor` | R1 `.109`, R2 `.113`, PA `.105`, DSW1 `.98`, DSW2 `.102`, all FULL | PASS 6 Nov (R1 .109, R2 .113, PA .105, DSW1 .98, DSW2 .102 all FULL) |
+| 0.6a | DSW1, DSW2 | `show ip ospf neighbor` | ASA (`.97` / `.101`), PA (`.117` / `.121`), other DSW over Vlan100 (`.126` / `.125`), all FULL | PASS 6 Nov (DSW1: .97, .117, .126; DSW2: .101, .121, .125; all FULL) |
+| 0.6b | ASA | `show route 172.16.0.56` and `show route 172.16.0.0` | HR via `.102` (DSW2), Staff via `.98` (DSW1) | PASS 6 Nov (HR/IT via .102, Staff/ATM via .98) |
+| 0.7 | ASA | `show route` | `0.0.0.0/0 via 172.16.0.105`; `172.16.0.80/29 via 172.16.0.105` (not connected `dmz`) | PASS 6 Nov |
+| 0.8 | ASA | `show nat` | Empty (no `obj_any`, no standby PAT after 5 Nov) | PASS 6 Nov (only built-in nlp_ entries) |
+| 0.9 | PA | `show routing protocol ospf neighbor` | R1 `.90`, R2 `.91`, ASA `.106`, DSW1 `.118`, DSW2 `.122` full | PASS 6 Nov (R1 .90, R2 .91, ASA .106, DSW1 .118, DSW2 .122 all full) |
+| 0.10 | PA | `show routing route` | `0.0.0.0/0 via .90` learned by OSPF (no static `DEFAULT-OUT` after 5 Nov); `172.16.0.72/29 via .106` (O2); HR/IT via `.106`, **not** via `.118`/`.122` | PASS 6 Nov (default via .90 O1; HR/IT via .106; .72/29 via .106) |
+| 0.11 | PA | `show interface ethernet1/6`, `1/7` | Link state **up** (5 Nov design), IPs `.117/30`, `.121/30` | PASS 6 Nov (eth1/6 .117/30 and eth1/7 .121/30 up) |
+| 0.12 | PA | `show running security-policy` | `DENY-ALL` last; `TEMP-SVR-UPDATES` present only while installs are ongoing | PASS 6 Nov (DENY-ALL last, no TEMP-SVR-UPDATES; re-add it for installs) |
+| 0.13 | R1 | `show ip route 0.0.0.0` | Only `via 172.17.9.94` | PASS 6 Nov |
+| 0.14 | R1 | `show track` | Track 1 Up (track 2 removed 5 Nov) | PASS 6 Nov |
+| 0.15 | R1 | `show ip ospf neighbor` | PA `.92` + R2 `.91` on G0/0/1, ASA `.110` on G0/1/1, all FULL | PASS 6 Nov (PA .92 + R2 .91 on G0/0/1, ASA .110 on G0/1/1) |
+| 0.16 | R1 | `ping 172.17.9.94` | 5/5 | PASS 6 Nov |
+| 0.17 | R2 | `show track 1`; `ping 172.17.10.94`; `show ip ospf neighbor` | Track Up; 5/5; PA `.92` + R1 `.90` on G0/0/1, ASA `.114` on G0/1/1 | PASS 6 Nov (PA .92 + R1 .90 on G0/0/1, ASA .114 on G0/1/1) |
+| 0.18 | R1, R2 | `show ip nat translations` (with HR browsing) | R1: HR `.6x` -> `203.149.210.185`, plus the static `.189`/`.190`/`.185:2222` entries. R2: only static entries while R1 is up | Not verified (NAT tables not shown) |
+| 0.19 | PA, ASA, DSW | `show ip route 0.0.0.0` / `show routing route destination 0.0.0.0/0` | Default via R1 (metric ~10 + path), not R2 (50 + path) | PASS 6 Nov (default learned from R1 on DSW1, DSW2, ASA and PA) |
 
 ---
 
@@ -147,12 +147,12 @@ Found by reading the configs against `plan.md`. Each links to the test that expo
 
 | ID | From | Test | Expected | Note | Result |
 |----|------|------|----------|------|--------|
-| 1.1 | HR-PC | `ipconfig`, `ping 172.16.0.57` | Lease in `.61-.62`, ping replies | Ping works only because of the temporary ICMP permit | PASS 4 Nov (`.61`) |
-| 1.2 | IT-PC | `ipconfig`, `ping 172.16.0.65` | Lease in `.68-.70`, ping replies | | PASS 4 Nov (`.68` seen) |
-| 1.3 | STAFF-PC | `ipconfig`; `ping 172.16.0.1`; `arp -a` | Lease in `.4-.30`; **ping fails**; gateway MAC in ARP table; no DNS server | `ACL_STAFF_IN` ends in `deny ip any any` | Lease PASS 4 Nov (`.4`) |
-| 1.4 | STAFF-PC | (DSW logs) | No `ACL_STAFF_IN denied ... -> 172.16.0.83(53)` | Confirms DNS isn't handed to Staff | PASS 4 Nov (after DHCP change) |
-| 1.5 | ATM-PC | `ipconfig /renew`; `arp -a` | Lease in `.52-.54`; gateway `.49` MAC in ARP table | Needs the P18 fix live on both DSWs | PASS 4 Nov (`.52`; fixes #18/#19 confirmed on DSW1 and DSW2) |
-| 1.6 | Each switch | `show ip dhcp snooping binding`; `show ip arp inspection statistics vlan <N>` | Laptop listed; DAI drop count flat | | |
+| 1.1 | HR-PC | `ipconfig`, `ping 172.16.0.57` | Lease in `.61-.62`, ping replies | Ping works only because of the temporary ICMP permit | PASS 4 Nov (`.61`); PASS 6 Nov (reported) |
+| 1.2 | IT-PC | `ipconfig`, `ping 172.16.0.65` | Lease in `.68-.70`, ping replies | | PASS 4 Nov (`.68` seen); PASS 6 Nov (reported) |
+| 1.3 | STAFF-PC | `ipconfig`; `ping 172.16.0.1`; `arp -a` | Lease in `.4-.30`; **ping fails**; gateway MAC in ARP table; no DNS server | `ACL_STAFF_IN` ends in `deny ip any any` | Lease PASS 4 Nov (`.4`); PASS 6 Nov (reported) |
+| 1.4 | STAFF-PC | (DSW logs) | No `ACL_STAFF_IN denied ... -> 172.16.0.83(53)` | Confirms DNS isn't handed to Staff | PASS 4 Nov (after DHCP change); PASS 6 Nov (reported) |
+| 1.5 | ATM-PC | `ipconfig /renew`; `arp -a` | Lease in `.52-.54`; gateway `.49` MAC in ARP table | Needs the P18 fix live on both DSWs | PASS 4 Nov (`.52`; fixes #18/#19 confirmed on DSW1 and DSW2); PASS 6 Nov (reported) |
+| 1.6 | Each switch | `show ip dhcp snooping binding`; `show ip arp inspection statistics vlan <N>` | Laptop listed; DAI drop count flat | | PASS 6 Nov (reported) |
 
 ---
 
@@ -160,16 +160,16 @@ Found by reading the configs against `plan.md`. Each links to the test that expo
 
 | ID | From | Test | Expected | If it fails, check | Result |
 |----|------|------|----------|--------------------|--------|
-| 2.1 | HR-PC | `ping 8.8.8.8` | Reply | PA `show session all filter source 172.16.0.61` | PASS 4 Nov |
-| 2.2 | HR-PC | `nslookup google.com` (uses `.83`) | Answer | 5.12a | PASS 4 Nov |
-| 2.3 | HR-PC | Browse google.com, twitch.tv | Loads | PA `HR-IT-INTERNET` | PASS 4 Nov |
-| 2.4 | HR-PC | `tracert -d 8.8.8.8` | `.57` -> `.97` -> `.105` -> `.90` -> `172.17.9.94` -> ... | Proves the serial path | |
-| 2.5 | R1 | `show ip nat translations \| include 172.16.0.6` while HR browses | HR translated to `203.149.210.185` (PA NAT before 5 Nov) | | |
-| 2.6 | IT-PC | Repeat 2.1-2.3 | Same as HR | | |
-| 2.7 | STAFF-PC | `ping 8.8.8.8`; `Test-NetConnection 8.8.8.8 -Port 443` | **Both fail** | DSW `ACL_STAFF_IN` deny counter | |
-| 2.8 | ATM-PC | Same as 2.7 | **Both fail** | `ACL_ATM_IN` | |
-| 2.9 | ASA | `packet-tracer input inside tcp 172.16.0.4 12345 8.8.8.8 443` | **drop** at `deny ip object-group STAFF-ATM any` | Second layer | |
-| 2.10 | R1 | `ping 8.8.8.8` | **Fails (expected)**: R1 sources from the WAN `/30` | | PASS 4 Nov (fails as expected) |
+| 2.1 | HR-PC | `ping 8.8.8.8` | Reply | PA `show session all filter source 172.16.0.61` | PASS 4 Nov; PASS 6 Nov (reported) |
+| 2.2 | HR-PC | `nslookup google.com` (uses `.83`) | Answer | 5.12a | PASS 4 Nov; PASS 6 Nov (reported) |
+| 2.3 | HR-PC | Browse google.com, twitch.tv | Loads | PA `HR-IT-INTERNET` | PASS 4 Nov; PASS 6 Nov (reported) |
+| 2.4 | HR-PC | `tracert -d 8.8.8.8` | `.57` -> `.97` -> `.105` -> `.90` -> `172.17.9.94` -> ... | Proves the serial path | PASS 6 Nov (reported) |
+| 2.5 | R1 | `show ip nat translations \| include 172.16.0.6` while HR browses | HR translated to `203.149.210.185` (PA NAT before 5 Nov) | | PASS 6 Nov (reported) |
+| 2.6 | IT-PC | Repeat 2.1-2.3 | Same as HR | | PASS 6 Nov (reported) |
+| 2.7 | STAFF-PC | `ping 8.8.8.8`; `Test-NetConnection 8.8.8.8 -Port 443` | **Both fail** | DSW `ACL_STAFF_IN` deny counter | PASS 6 Nov (reported) |
+| 2.8 | ATM-PC | Same as 2.7 | **Both fail** | `ACL_ATM_IN` | PASS 6 Nov (reported) |
+| 2.9 | ASA | `packet-tracer input inside tcp 172.16.0.4 12345 8.8.8.8 443` | **drop** at `deny ip object-group STAFF-ATM any` | Second layer | PASS 6 Nov (reported) |
+| 2.10 | R1 | `ping 8.8.8.8` | **Fails (expected)**: R1 sources from the WAN `/30` | | PASS 4 Nov (fails as expected); PASS 6 Nov (reported) |
 
 ---
 
@@ -179,14 +179,14 @@ Targets need inbound ICMP allowed (1.2 step 3) and a listener for TCP rows (e.g.
 
 | ID | From -> To | Test | Expected | Result |
 |----|-----------|------|----------|--------|
-| 3.1 | HR -> Staff | ping, TCP 8080 | **Both fail** (reply dropped by `ACL_STAFF_IN`) | |
-| 3.2 | HR -> ATM | ping, TCP | **Both fail** | |
-| 3.3 | Staff -> HR | ping, TCP | **Both fail** | |
-| 3.4 | ATM -> Staff | ping, TCP | **Both fail** | |
-| 3.5 | HR <-> IT | ping | **Succeeds during testing (P7)**; must fail after Stage 10 | |
-| 3.6 | HR -> IT | TCP 8080 | **Fails** | |
-| 3.7 | IT -> HR | TCP 8080 | **Fails** | |
-| 3.8 | HR-PC | `ping 172.16.0.35`; `Test-NetConnection 172.16.0.35 -Port 22` | **Both fail** (OOB is in VRF OOB) | |
+| 3.1 | HR -> Staff | ping, TCP 8080 | **Both fail** (reply dropped by `ACL_STAFF_IN`) | PASS 6 Nov (reported) |
+| 3.2 | HR -> ATM | ping, TCP | **Both fail** | PASS 6 Nov (reported) |
+| 3.3 | Staff -> HR | ping, TCP | **Both fail** | PASS 6 Nov (reported) |
+| 3.4 | ATM -> Staff | ping, TCP | **Both fail** | PASS 6 Nov (reported) |
+| 3.5 | HR <-> IT | ping | **Succeeds during testing (P7)**; must fail after Stage 10 | PASS 6 Nov (reported; ping works until Stage 10) |
+| 3.6 | HR -> IT | TCP 8080 | **Fails** | PASS 6 Nov (reported) |
+| 3.7 | IT -> HR | TCP 8080 | **Fails** | PASS 6 Nov (reported) |
+| 3.8 | HR-PC | `ping 172.16.0.35`; `Test-NetConnection 172.16.0.35 -Port 22` | **Both fail** (OOB is in VRF OOB) | PASS 6 Nov (reported) |
 
 ---
 
@@ -196,29 +196,29 @@ Targets need inbound ICMP allowed (1.2 step 3) and a listener for TCP rows (e.g.
 
 | ID | Where | Test | Expected | Result |
 |----|-------|------|----------|--------|
-| 4.1 | ASA | `ping server 172.16.0.74` (and `.75`, `.76`, `.77`) | Reply | |
-| 4.2 | Each VM | `ip route` | One default, via `172.16.0.73` | |
-| 4.3 | Each VM | `ping -c 4 172.16.0.73` | Reply | |
+| 4.1 | ASA | `ping server 172.16.0.74` (and `.75`, `.76`, `.77`) | Reply | PASS 6 Nov (reported) |
+| 4.2 | Each VM | `ip route` | One default, via `172.16.0.73` | PASS 6 Nov (reported) |
+| 4.3 | Each VM | `ping -c 4 172.16.0.73` | Reply | PASS 6 Nov (reported) |
 
 ### 4B: Access matrix (File = HR only; Accounts and Txn = Staff and ATM only)
 
 | ID | From -> To | Test | Expected | Enforced at | Result |
 |----|-----------|------|----------|-------------|--------|
-| 4.4 | HR -> File `.74` | `ping 172.16.0.74` | Reply | DSW + ASA ICMP permits | |
-| 4.5 | HR -> File `.74` | `net use H: \\172.16.0.74\HR /user:hrmanager`, save a file, check `sudo ls -la /srv/samba/hr` on VM103 | Works, file owned by hrmanager:hrshare | DSW, ASA `permit tcp HR FILE-SVR eq 445` | PASS 4 Nov |
-| 4.6 | IT -> File `.74` | ping, `Test-NetConnection -Port 445` | **Both fail** (ICMP at ASA, TCP at DSW) | | |
-| 4.7 | Staff -> File `.74` | `Test-NetConnection -Port 445` | **Fails** | DSW | |
-| 4.8 | Staff -> Accounts `.75` | Browser `https://172.16.0.75` (login staff1); `Test-NetConnection -Port 443` | Page loads; True | DSW, ASA `permit ip STAFF-ATM ACCT-SVR` | PASS 4 Nov |
-| 4.8a | Staff -> Txn `.76` | Same, against `.76` | Loads | ASA `permit ip STAFF-ATM TXN-SVR` | |
-| 4.9 | ATM -> Accounts `.75`, Txn `.76` | Same (login atm1) | Loads | | **Pending** (needs 1.5) |
-| 4.10 | DHCP relay | Leases on each VLAN (Stage 1) | Leases issued | ASA `DSW-SVIS` permits | PASS 4 Nov (HR, IT, Staff) |
-| 4.11 | HR -> Accounts `.75`, Txn `.76` | ping, `Test-NetConnection -Port 443` | **Both fail** | ICMP at ASA, TCP at DSW | |
-| 4.11a | HR -> DHCP `.77` | ping | **Fails** (leases still work via relay) | ASA | |
-| 4.11b | HR -> ASA `.73` | ping | **Fails** (ASA only answers pings on the ingress interface `.97`) | | |
-| 4.12 | IT -> Accounts / Txn | ping, TCP 443 | **Both fail** | | |
-| 4.13 | Staff -> `.75` on another port (e.g. 22) | `Test-NetConnection -Port 22` | Reaches the server (plan.md allows Staff/ATM `ip` to these servers) | | |
-| 4.14 | Server -> server | VM103: `nc -zv 172.16.0.75 443` | **Pass** (same subnet, no firewall in between) | | |
-| 4.15 | Server -> user VLAN | VM103: `ping 172.16.0.61` | **Fails** (`SERVER_IN` denies SERVERS -> INTERNAL) | | |
+| 4.4 | HR -> File `.74` | `ping 172.16.0.74` | Reply | DSW + ASA ICMP permits | PASS 6 Nov (reported) |
+| 4.5 | HR -> File `.74` | `net use H: \\172.16.0.74\HR /user:hrmanager`, save a file, check `sudo ls -la /srv/samba/hr` on VM103 | Works, file owned by hrmanager:hrshare | DSW, ASA `permit tcp HR FILE-SVR eq 445` | PASS 4 Nov; PASS 6 Nov (reported) |
+| 4.6 | IT -> File `.74` | ping, `Test-NetConnection -Port 445` | **Both fail** (ICMP at ASA, TCP at DSW) | | PASS 6 Nov (reported) |
+| 4.7 | Staff -> File `.74` | `Test-NetConnection -Port 445` | **Fails** | DSW | PASS 6 Nov (reported) |
+| 4.8 | Staff -> Accounts `.75` | Browser `https://172.16.0.75` (login staff1); `Test-NetConnection -Port 443` | Page loads; True | DSW, ASA `permit ip STAFF-ATM ACCT-SVR` | PASS 4 Nov; PASS 6 Nov (reported) |
+| 4.8a | Staff -> Txn `.76` | Same, against `.76` | Loads | ASA `permit ip STAFF-ATM TXN-SVR` | PASS 6 Nov (reported) |
+| 4.9 | ATM -> Accounts `.75`, Txn `.76` | Same (login atm1) | Loads | | PASS 6 Nov (reported) |
+| 4.10 | DHCP relay | Leases on each VLAN (Stage 1) | Leases issued | ASA `DSW-SVIS` permits | PASS 4 Nov (HR, IT, Staff); PASS 6 Nov (reported) |
+| 4.11 | HR -> Accounts `.75`, Txn `.76` | ping, `Test-NetConnection -Port 443` | **Both fail** | ICMP at ASA, TCP at DSW | PASS 6 Nov (reported) |
+| 4.11a | HR -> DHCP `.77` | ping | **Fails** (leases still work via relay) | ASA | PASS 6 Nov (reported) |
+| 4.11b | HR -> ASA `.73` | ping | **Fails** (ASA only answers pings on the ingress interface `.97`) | | PASS 6 Nov (reported) |
+| 4.12 | IT -> Accounts / Txn | ping, TCP 443 | **Both fail** | | PASS 6 Nov (reported) |
+| 4.13 | Staff -> `.75` on another port (e.g. 22) | `Test-NetConnection -Port 22` | Reaches the server (plan.md allows Staff/ATM `ip` to these servers) | | PASS 6 Nov (reported) |
+| 4.14 | Server -> server | VM103: `nc -zv 172.16.0.75 443` | **Pass** (same subnet, no firewall in between) | | PASS 6 Nov (reported) |
+| 4.15 | Server -> user VLAN | VM103: `ping 172.16.0.61` | **Fails** (`SERVER_IN` denies SERVERS -> INTERNAL) | | PASS 6 Nov (reported) |
 
 ---
 
@@ -228,28 +228,28 @@ Targets need inbound ICMP allowed (1.2 step 3) and a listener for TCP rows (e.g.
 
 | ID | Where | Test | Expected | Result |
 |----|-------|------|----------|--------|
-| 5.1 | PA | `ping source 172.16.0.81 host 172.16.0.82` (and `.83`, `.84`, `.85`) | Reply | |
-| 5.2 | Each DMZ VM | `ip route` | One default, via `172.16.0.81` (jump hosts: on `ens19` only) | |
-| 5.3 | ASA | `show route 172.16.0.80` | Route via `.105` (no Vlan92 after 5 Nov) | PASS 4 Nov |
+| 5.1 | PA | `ping source 172.16.0.81 host 172.16.0.82` (and `.83`, `.84`, `.85`) | Reply | PASS 6 Nov (reported) |
+| 5.2 | Each DMZ VM | `ip route` | One default, via `172.16.0.81` (jump hosts: on `ens19` only) | PASS 6 Nov (reported) |
+| 5.3 | ASA | `show route 172.16.0.80` | Route via `.105` (no Vlan92 after 5 Nov) | PASS 4 Nov; PASS 6 Nov (reported) |
 
 ### 5B: Access matrix (HR/IT reach Web and DNS; IT reaches the jump hosts)
 
 | ID | From -> To | Test | Expected | Result |
 |----|-----------|------|----------|--------|
-| 5.4 | ASA | `packet-tracer input inside tcp 172.16.0.61 12345 172.16.0.82 443 detailed` | Allow, egress **`outside`** | |
-| 5.5 | PA | `test security-policy-match from inside to dmz source 172.16.0.61 destination 172.16.0.82 protocol 6 destination-port 443 application ssl` | `INTERNAL-TO-WEB` allow | |
-| 5.6 | HR -> Web `.82` | Browser `http://172.16.0.82` and `https://172.16.0.82` | Page loads | PASS 4 Nov (HR and IT HTTPS sessions seen on the PA) |
-| 5.7 | HR -> DNS `.83` | `nslookup google.com 172.16.0.83` | Answer | PASS 4 Nov |
-| 5.8 | IT -> Web, DNS | Repeat 5.6, 5.7 | Pass | PASS 4 Nov (IT reached the site by name) |
-| 5.9 | IT -> Jump `.84`, `.85` | `ssh <user>@172.16.0.84` | Login prompt | |
-| 5.10 | HR -> Jump `.84` | `Test-NetConnection 172.16.0.84 -Port 22` | **Fails** (no SSH permit for HR) | |
-| 5.11 | Staff/ATM -> Web `.82` | `Test-NetConnection 172.16.0.82 -Port 80` | **Fails** | |
-| 5.12 | HR -> `.81`, `.82`, `.83`, `.84`, `.85` | ping | **All fail** (no ICMP to the DMZ in plan.md) | |
-| 5.12a | HR -> DNS, internet name | `nslookup google.com 172.16.0.83` | Answer | PASS 4 Nov |
-| 5.12b | HR -> DNS, another rack's name | `nslookup wkg00n.sitict.net 172.16.0.83` | Answer (via the ICT forwarder `172.18.4.32`) | PASS 4 Nov |
-| 5.12c | HR -> DNS, own name | `nslookup gruppesechs.sitict.net 172.16.0.83` | `203.149.210.189` | |
-| 5.13 | DMZ -> internal | Web VM: `ping 172.16.0.74`; `nc -zv 172.16.0.74 445` | **Both fail** (containment) | |
-| 5.14 | DMZ -> user VLAN | Web VM: `ping 172.16.0.61` | **Fails** | |
+| 5.4 | ASA | `packet-tracer input inside tcp 172.16.0.61 12345 172.16.0.82 443 detailed` | Allow, egress **`outside`** | PASS 6 Nov (reported) |
+| 5.5 | PA | `test security-policy-match from inside to dmz source 172.16.0.61 destination 172.16.0.82 protocol 6 destination-port 443 application ssl` | `INTERNAL-TO-WEB` allow | PASS 6 Nov (reported) |
+| 5.6 | HR -> Web `.82` | Browser `http://172.16.0.82` and `https://172.16.0.82` | Page loads | PASS 4 Nov (HR and IT HTTPS sessions seen on the PA); PASS 6 Nov (reported) |
+| 5.7 | HR -> DNS `.83` | `nslookup google.com 172.16.0.83` | Answer | PASS 4 Nov; PASS 6 Nov (reported) |
+| 5.8 | IT -> Web, DNS | Repeat 5.6, 5.7 | Pass | PASS 4 Nov (IT reached the site by name); PASS 6 Nov (reported) |
+| 5.9 | IT -> Jump `.84`, `.85` | `ssh <user>@172.16.0.84` | Login prompt | PASS 6 Nov (reported) |
+| 5.10 | HR -> Jump `.84` | `Test-NetConnection 172.16.0.84 -Port 22` | **Fails** (no SSH permit for HR) | PASS 6 Nov (reported) |
+| 5.11 | Staff/ATM -> Web `.82` | `Test-NetConnection 172.16.0.82 -Port 80` | **Fails** | PASS 6 Nov (reported) |
+| 5.12 | HR -> `.81`, `.82`, `.83`, `.84`, `.85` | ping | **All fail** (no ICMP to the DMZ in plan.md) | PASS 6 Nov (reported) |
+| 5.12a | HR -> DNS, internet name | `nslookup google.com 172.16.0.83` | Answer | PASS 4 Nov; PASS 6 Nov (reported) |
+| 5.12b | HR -> DNS, another rack's name | `nslookup wkg00n.sitict.net 172.16.0.83` | Answer (via the ICT forwarder `172.18.4.32`) | PASS 4 Nov; PASS 6 Nov (reported) |
+| 5.12c | HR -> DNS, own name | `nslookup gruppesechs.sitict.net 172.16.0.83` | `172.16.0.82` (internal view; outside clients get `203.149.210.189`) | PASS 6 Nov (HR gets 172.16.0.82 from the internal view) |
+| 5.13 | DMZ -> internal | Web VM: `ping 172.16.0.74`; `nc -zv 172.16.0.74 445` | **Both fail** (containment) | PASS 6 Nov (reported) |
+| 5.14 | DMZ -> user VLAN | Web VM: `ping 172.16.0.61` | **Fails** | PASS 6 Nov (reported) |
 
 ---
 
@@ -259,17 +259,17 @@ Public mappings: Web `203.149.210.189` (80 + 443), DNS `203.149.210.190`, Jump `
 
 | ID | Test | Expected | Device check | Result |
 |----|------|----------|--------------|--------|
-| 6.1 | `curl -m 5 http://203.149.210.189` | Web page | PA `show session all filter destination 203.149.210.189` | |
-| 6.2 | `curl -k -m 5 https://203.149.210.189` / browser | Page (certificate warning) | R1 static NAT `.189:443`; PA `INBOUND-WEB` | PASS 4 Nov (PA NAT) |
-| 6.3 | `nslookup gruppesechs.sitict.net 203.149.210.190` | `203.149.210.189` | PA `show session all filter destination 203.149.210.190` | PASS 4 Nov |
-| 6.3a | `nslookup gruppesechs.sitict.net` (lab resolver) + browser `https://gruppesechs.sitict.net` | `.189`, page loads | Lab resolver `172.18.18.36` caches for the record's TTL | Pending (old `.186` cached on 4 Nov; re-check) |
-| 6.4 | `ssh -p 2222 <user>@203.149.210.185` | Jump host login | R1 static NAT `.185:2222`; PA `JUMP-SSH-IN` | PASS 4 Nov (PA NAT) |
-| 6.4a | HR/IT PC: `nslookup gruppesechs.sitict.net`, then browse it | `172.16.0.82` (internal view); page loads | VM101 views (HANDOVER 8.10) | |
-| 6.5 | `ping 203.149.210.189` | **Fails** | | |
-| 6.6 | `ssh -p 22 <user>@203.149.210.185`; any port other than 2222 | **Fails** | | |
-| 6.7 | `ssh 172.17.9.93` (R1 WAN) | **Fails** | R1 `WAN-IN` final deny (P6) | |
-| 6.8 | Anything to `172.16.0.x` | **Fails** (not routed) | | |
-| 6.9 | Another rack's user browses `https://gruppesechs.sitict.net` | Page loads | | |
+| 6.1 | `curl -m 5 http://203.149.210.189` | Web page | PA `show session all filter destination 203.149.210.189` | PASS 6 Nov (curl) |
+| 6.2 | `curl -k -m 5 https://203.149.210.189` / browser | Page (certificate warning) | R1 static NAT `.189:443`; PA `INBOUND-WEB` | PASS 6 Nov (curl -k, via R1 static NAT) |
+| 6.3 | `nslookup gruppesechs.sitict.net 203.149.210.190` | `203.149.210.189` | PA `show session all filter destination 203.149.210.190` | PASS 6 Nov (returns 203.149.210.189) |
+| 6.3a | `nslookup gruppesechs.sitict.net` (lab resolver) + browser `https://gruppesechs.sitict.net` | `.189`, page loads | Lab resolver `172.18.18.36` caches for the record's TTL | PASS 6 Nov (lab resolver 172.18.18.36 returns .189) |
+| 6.4 | `ssh -p 2222 <user>@203.149.210.185` | Jump host login | R1 static NAT `.185:2222`; PA `JUMP-SSH-IN` | PASS 6 Nov (landed on VM102, ens19 172.16.0.84, via R1 static NAT .185:2222) |
+| 6.4a | HR/IT PC: `nslookup gruppesechs.sitict.net`, then browse it | `172.16.0.82` (internal view); page loads | VM101 views (HANDOVER 8.10) | PASS 6 Nov (HR nslookup returns 172.16.0.82; site loads) |
+| 6.5 | `ping 203.149.210.189` | **Fails** | | PASS 6 Nov (no echo reply; but TTL expired from 172.17.9.93 = loop at R1, check the Null0 route) |
+| 6.6 | `ssh -p 22 <user>@203.149.210.185`; any port other than 2222 | **Fails** | | PASS 6 Nov (no login prompt; no error text captured) |
+| 6.7 | `ssh 172.17.9.93` (R1 WAN) | **Fails** | R1 `WAN-IN` final deny (P6) | PASS 6 Nov (no login prompt; no error text captured) |
+| 6.8 | Anything to `172.16.0.x` | **Fails** (not routed) | | PASS 6 Nov (no login prompt; no error text captured) |
+| 6.9 | Another rack's user browses `https://gruppesechs.sitict.net` | Page loads | | Not run |
 
 ---
 
@@ -279,23 +279,23 @@ Same pattern as Lab 3.1: engineer -> jump host -> device management IP. Run from
 
 | ID | Test from VM102 | Expected | Result |
 |----|-----------------|----------|--------|
-| 7.0 | `ip -br a`; `ip route` | ens18 `.44/28`, ens19 `.84/29`; one default via `.81` on ens19 | PASS 4 Nov (addresses) |
-| 7.1 | `ping 172.16.0.33` (R1), `.34` (R2) | Reply | PASS 4 Nov (failed earlier while the Proxmox bond was disturbed, P19) |
-| 7.2 | ping `.35`, `.36`, `.37`-`.40` | Reply | |
-| 7.3 | ping `.41` (PA), `.42` (ASA), `.43` (Proxmox) | Reply | |
-| 7.4 | `ssh bigDonkBonkAdmin@<Cisco mgmt IP>` | Login. Pause first while TACACS times out, unless tac_plus is running (P13) | |
-| 7.5 | `ssh bigDonkBonkAdmin@172.16.0.42` (ASA) | Login | |
-| 7.6 | `ssh bigDonkBonkAdmin@172.16.0.41` (PA) | Login | |
-| 7.7 | `curl -k -s -o /dev/null -w "%{http_code}\n" https://172.16.0.43:8006` | `200` | |
-| 7.8 | Repeat 7.1-7.4 from VM106 (`.45`) | Same | |
-| 7.9 | From MGMT-PC (`.46`): `ssh` to `.35` | **Fails** (`MGMT-ONLY`); browser `https://172.16.0.43:8006` **works** | |
-| 7.10 | DSW1: `ping vrf OOB 172.16.0.44` | Reply | |
-| 7.11 | ASA: `ping management 172.16.0.44` | Reply | |
-| 7.12 | R1: `show access-lists WAN-IN` | P6: lines 10/20 reference `.94` | |
-| 7.13 | VM102 and VM106: `chronyc tracking`; `chronyc -N sources`; `sudo ss -ulpn \| grep chronyd` | `Leap status: Normal`; `0.sg.pool.ntp.org` entries and the other TACACS VM listed; chronyd on **`0.0.0.0:123`** (only `127.0.0.1:323` = not serving) | PASS 4 Nov (VM102) |
-| 7.14 | Cisco devices: `show ntp associations`; `show ntp status` | Both `.44` and `.45` with `reach` > 0; `Clock is synchronized`. Either may be `*`; the other should be a candidate | PASS 4 Nov on R1: `.45` `*` stratum 3 reach 377, `.44` stratum 4 reach 7 (rising). R2 synced to `.45`. Other devices to check |
-| 7.15 | ASA: `show ntp associations`; `show ntp status`. PA: `show ntp` | Synchronized to `.44` / `.45` | |
-| 7.16 | VM102: `sudo chronyc clients` | The OOB devices (`.33`-`.42`) appear | |
+| 7.0 | `ip -br a`; `ip route` | ens18 `.44/28`, ens19 `.84/29`; one default via `.81` on ens19 | PASS 6 Nov |
+| 7.1 | `ping 172.16.0.33` (R1), `.34` (R2) | Reply | PASS 6 Nov (.33 and .34 reply) |
+| 7.2 | ping `.35`, `.36`, `.37`-`.40` | Reply | PASS 6 Nov (.35 - .40 reply) |
+| 7.3 | ping `.41` (PA), `.42` (ASA), `.43` (Proxmox) | Reply | PASS 6 Nov (.41 PA, .42 ASA, .43 Proxmox reply; .44, .45, .46 also reply) |
+| 7.4 | `ssh bigDonkBonkAdmin@<Cisco mgmt IP>` | Login. Pause first while TACACS times out, unless tac_plus is running (P13) | PASS 6 Nov (SSH to all Cisco devices works; login is LOCAL, tac_plus not running) |
+| 7.5 | `ssh bigDonkBonkAdmin@172.16.0.42` (ASA) | Login | PASS 6 Nov. Needs ssh -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa (ASA offers ssh-rsa only). First login forces a password change. |
+| 7.6 | `ssh bigDonkBonkAdmin@172.16.0.41` (PA) | Login | PASS 6 Nov |
+| 7.7 | `curl -k -s -o /dev/null -w "%{http_code}\n" https://172.16.0.43:8006` | `200` | PASS 6 Nov (200) |
+| 7.8 | Repeat 7.1-7.4 from VM106 (`.45`) | Same | PASS 6 Nov (VM106 SSH and chrony seen; ping sweep from VM106 not shown) |
+| 7.9 | From MGMT-PC (`.46`): `ssh` to `.35` | **Fails** (`MGMT-ONLY`); browser `https://172.16.0.43:8006` **works** | PASS 6 Nov (SSH to .35 refused; Proxmox GUI .43 works) |
+| 7.10 | DSW1: `ping vrf OOB 172.16.0.44` | Reply | PASS 6 Nov |
+| 7.11 | ASA: `ping management 172.16.0.44` | Reply | PASS 6 Nov |
+| 7.12 | R1: `show access-lists WAN-IN` | P6: lines 10/20 reference `.94` | P6 confirmed: lines 10/20 reference .94. r1.ttl fixed 6 Nov; apply live (no 10, no 20, re-add with .93) |
+| 7.13 | VM102 and VM106: `chronyc tracking`; `chronyc -N sources`; `sudo ss -ulpn \| grep chronyd` | `Leap status: Normal`; `0.sg.pool.ntp.org` entries and the other TACACS VM listed; chronyd on **`0.0.0.0:123`** (only `127.0.0.1:323` = not serving) | PASS 6 Nov (VM102: Leap Normal, stratum 3, ss -uln shows 0.0.0.0:123; VM106 chrony Normal; sudo not available for this user) |
+| 7.14 | Cisco devices: `show ntp associations`; `show ntp status` | Both `.44` and `.45` with `reach` > 0; `Clock is synchronized`. Either may be `*`; the other should be a candidate | PASS 6 Nov (R1 4 Nov; SW1 seen 6 Nov; other devices reported OK) |
+| 7.15 | ASA: `show ntp associations`; `show ntp status`. PA: `show ntp` | Synchronized to `.44` / `.45` | PASS 6 Nov (ASA synced to .44, PA synced to .45) |
+| 7.16 | VM102: `sudo chronyc clients` | The OOB devices (`.33`-`.42`) appear | Skipped (needs sudo) |
 
 **Diagnosing 7.1 (P19):**
 1. Ping sweep `.33`-`.43` from VM102. All down -> the Proxmox bond (`cat /proc/net/bonding/bond0` on the host: active slave `eno6`, both slaves up; LAN 4 cabled to DSW1 Gi1/0/24, not to a laptop). Only `.33` down -> R1.
@@ -311,12 +311,12 @@ Same pattern as Lab 3.1: engineer -> jump host -> device management IP. Run from
 | 8.1 | Txn `.76`: `curl -m 5 https://www.google.com` outside TXN-WINDOW, **after** the temporary rules are removed | **Fails** | |
 | 8.2 | ASA: `packet-tracer input server tcp 172.16.0.76 12345 8.8.8.8 443` with TXN-WINDOW covering now (edit ASA `time-range` and PA `schedule`, then restore) | Allow on both firewalls | |
 | 8.3 | ASA: `packet-tracer input server udp 172.16.0.76 12345 172.16.0.83 53` | Should allow in window; **expected drop at `SERVER_IN` line 1 (P3)** | |
-| 8.4 | Any server: `sudo apt update` | Works **only** while the temporary rules exist | PASS 4 Nov (installs done) |
-| 8.5 | After removing the temporary rules: repeat 8.4 | **Fails** | |
-| 8.6 | Jump `.84`: `chronyc sources` / `ntpdate -q 0.sg.pool.ntp.org` | Works (PA `DMZ-OUTBOUND-NTP`) | |
-| 8.7 | Jump `.84`: `dig @8.8.8.8 google.com +short` | Works | |
-| 8.8 | VM101: `dig @172.18.4.32 google.com +short` | Works (PA `DNS-SVR-FORWARD` -> `ICT-DNS`) | PASS 4 Nov |
-| 8.9 | VM101, **after** removing the temporary rules: `dig @127.0.0.1 google.com +short` and PA `test security-policy-match from dmz to outside source 172.16.0.83 destination 172.18.4.32 protocol 17 destination-port 53 application dns-base` | Answer; rule `DNS-SVR-FORWARD` | |
+| 8.4 | Any server: `sudo apt update` | Works **only** while the temporary rules exist | PASS 4 Nov (installs done). 6 Nov: fails without the rules, as expected |
+| 8.5 | After removing the temporary rules: repeat 8.4 | **Fails** | PASS 6 Nov (apt update fails; temporary rules not present after the reload) |
+| 8.6 | Jump `.84`: `chronyc sources` / `ntpdate -q 0.sg.pool.ntp.org` | Works (PA `DMZ-OUTBOUND-NTP`) | PASS 6 Nov (VM102 syncs to 0.sg.pool.ntp.org) |
+| 8.7 | Jump `.84`: `dig @8.8.8.8 google.com +short` | Works | PASS 6 Nov (dig @8.8.8.8 from VM102) |
+| 8.8 | VM101: `dig @172.18.4.32 google.com +short` | Works (PA `DNS-SVR-FORWARD` -> `ICT-DNS`) | PASS 4 Nov, PASS 6 Nov (dig @172.18.4.32 from VM101) |
+| 8.9 | VM101, **after** removing the temporary rules: `dig @127.0.0.1 google.com +short` and PA `test security-policy-match from dmz to outside source 172.16.0.83 destination 172.18.4.32 protocol 17 destination-port 53 application dns-base` | Answer; rule `DNS-SVR-FORWARD` | PASS 6 Nov (dig @127.0.0.1 resolves; rule DNS-SVR-FORWARD present; policy-match command itself not run) |
 
 ---
 
@@ -362,16 +362,16 @@ One at a time, restore after each. Rows 9.2-9.4b are caused physically (unplug a
 
 ## Results summary
 
-| Stage | Status (4 Nov) |
+| Stage | Status (6 Nov) |
 |-------|----------------|
-| 0 Infrastructure | All pass; re-check 0.3 after the P10 fix |
-| 1 Addressing | HR, IT, Staff, ATM pass |
-| 2 Internet | HR pass; IT, deny tests not run |
-| 3 VLAN isolation | Not run |
-| 4 Internal servers | File share and Staff -> Accounts pass; deny tests and ATM pending |
-| 5 DMZ | Web and DNS from HR/IT pass, incl. other racks' names; jump and deny tests not run |
-| 6 Inbound | HTTPS, DNS, jump SSH pass; 6.1, 6.3a, deny tests pending |
-| 7 OOB | VM102 -> R1 reachable; NTP from both TACACS VMs works on R1 (check the other devices); SSH to each device (7.4-7.8) to run |
-| 8 Server outbound | Installs and DNS forwarding pass; post-cleanup tests pending |
+| 0 Infrastructure | All pass on the 5 Nov design, except 0.18 (NAT tables not shown) |
+| 1 Addressing | Pass (reported) |
+| 2 Internet | Pass (reported), incl. Staff/ATM deny tests |
+| 3 VLAN isolation | Pass (reported); 3.5 HR <-> IT ping works until Stage 10 |
+| 4 Internal servers | Pass (reported), incl. ATM and deny tests |
+| 5 DMZ | Pass (reported); HR/IT now resolve the site name to `172.16.0.82` |
+| 6 Inbound | Pass, 6.9 not run. 6.5 shows a TTL-expired loop at R1 (check the Null0 route) |
+| 7 OOB | Pass. 7.16 skipped (no sudo). 7.12: P6 still to apply on the live R1 |
+| 8 Server outbound | 8.4 to 8.9 done. 8.1 to 8.3 not run. Temporary install rules need re-adding for Wazuh |
 | 9 Redundancy | Not run |
 | 10 Hardening | Not started |
