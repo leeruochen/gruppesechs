@@ -55,6 +55,12 @@ No VLANs should be able to access each other
 - no defense needed
 
 
+1 Caching DNS server (added 9 Nov)
+
+- VM108, 172.16.0.86 in the DMZ, recursive only for HR, IT and the DMZ hosts
+- caches lookups, forwards to the ICT DNS then 8.8.8.8; asks VM101 for gruppesechs.sitict.net
+- not published on the internet
+
 1 DHCP server
 
 - standalone ISC DHCP server on VM107 (172.16.0.77); both DSWs relay to it with ip helper-address  
@@ -76,7 +82,8 @@ No VLANs should be able to access each other
 - VM104 (Accounts Server)  
 - VM105 (Transactions Server)  
 - VM106 (TACACS+ 2\)  
-- VM107 (DHCP)
+- VM107 (DHCP)  
+- VM108 (Caching DNS, added 9 Nov)
 
 1x ISP1
 
@@ -203,7 +210,7 @@ Usable IP: 172.16.0.82 to 172.16.0.86
 - VM102(TACACS+ 1 / Jump 1): 172.16.0.84  
   - public 203.149.210.185 tcp/2222 -> .84:22 (R1 static NAT; 129.126.142.185 on R2)  
 - VM106(TACACS+ 2 / Jump 2): 172.16.0.85  
-- .86: unused. The ASA backup gateway (Vlan92 on E1/7) was removed 5 Nov. The DMZ belongs to the PA only; if the PA fails, the DMZ is unreachable by design.  
+- VM108(Caching DNS): 172.16.0.86 (9 Nov). Recursive only, for HR, IT and the DMZ. No public NAT, so not reachable from the internet. Forwards `gruppesechs.sitict.net` to VM101 (.83) and everything else to the ICT DNS, then 8.8.8.8. Was the old ASA backup gateway address (Vlan92 on E1/7, removed 5 Nov). The DMZ belongs to the PA only; if the PA fails, the DMZ is unreachable by design.  
 - Servers reach this VLAN through Proxmox eno5 (vmbr2) -> PA eth1/4 directly (no DSW in the path since 5 Nov)
 
 Broadcast: 172.16.0.87
@@ -634,7 +641,7 @@ R1
   - ip add 172.16.0.109 255.255.255.252, ip nat inside  
   - ospf 1 area 0, cost 500 (only used when the PA is down)  
 - NAT (moved from the PA, 5 Nov)  
-  - ip access-list extended NAT-SOURCES: HR 172.16.0.56/29, IT 172.16.0.64/29, Txn .76, DNS .83, jump hosts .84/.85 (second layer behind the PA; Staff/ATM can't be translated even if a firewall rule were wrong)  
+  - ip access-list extended NAT-SOURCES: HR 172.16.0.56/29, IT 172.16.0.64/29, Txn .76, DNS .83, caching DNS .86, jump hosts .84/.85 (second layer behind the PA; Staff/ATM can't be translated even if a firewall rule were wrong)  
   - ip nat pool PUB-PAT 203.149.210.185 203.149.210.185 prefix-length 29  
   - ip nat inside source list NAT-SOURCES pool PUB-PAT overload  
   - ip nat inside source static tcp 172.16.0.82 80 / 443 -> 203.149.210.189 80 / 443 extendable  
@@ -843,7 +850,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - object network DMZ-SUBNET, subnet 172.16.0.80 255.255.255.248  
   - object network INTERNAL, subnet 172.16.0.0 255.255.255.128  
   - object network FILE-SVR host .74, ACCT-SVR host .75, TXN-SVR host .76, DHCP-SVR host .77  
-  - object network WEB-SVR host .82, DNS-SVR host .83, JUMP-SVR host .84, JUMP2-SVR host .85  
+  - object network WEB-SVR host .82, DNS-SVR host .83, JUMP-SVR host .84, JUMP2-SVR host .85, CACHE-DNS host .86  
   - object-group network STAFF-ATM (STAFF, ATM)  
   - object-group network HR-IT (HR, IT)  
   - object-group network DSWs (172.16.0.98, .102)  
@@ -858,7 +865,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
     - permit dhcp relay from DSW-SVIS to DHCP-SVR, udp port 67  
     - allow HR to access file server, tcp port 445 and icmp  
     - allow staff and atm to access accounts and txn servers, ip  
-    - allow HR-IT to DNS-SVR udp/tcp 53, and WEB-SVR tcp 80/443  
+    - allow HR-IT to CACHE-DNS (.86) and DNS-SVR udp/tcp 53, and WEB-SVR tcp 80/443  
     - allow IT to ssh to JUMP-SVRs  
     - deny ip any to SERVERS log, deny ip any to DMZ-SUBNET log  
     - deny STAFF-ATM to any, (internet), ip  
@@ -974,7 +981,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - address STAFF 172.16.0.0/27, ATM 172.16.0.48/29, HR-NET 172.16.0.56/29, IT-NET 172.16.0.64/29 (HR-NET/IT-NET named to avoid clashing with GeoIP country codes)  
   - address SERVERS 172.16.0.72/29, DMZ-SUBNET 172.16.0.80/29  
   - address FILE-SVR .74, ACCT-SVR .75, TXN-SVR .76, DHCP-SVR .77  
-  - address WEB-SVR .82, DNS-SVR .83, JUMP-SVR .84, JUMP2-SVR .85  
+  - address WEB-SVR .82, DNS-SVR .83, JUMP-SVR .84, JUMP2-SVR .85, CACHE-DNS .86  
   - PUB-PAT / PUB-WEB / PUB-DNS removed 5 Nov (no NAT on the PA)  
   - address DNS-FORWARDERS-1 8.8.8.8/32, DNS-FORWARDERS-2 1.1.1.1/32, ICT-DNS 172.18.4.32/32 (lab caching DNS, needed for other racks' names)  
   - address-group STAFF-ATM \[ STAFF ATM \], HR-IT \[ HR-NET IT-NET \], INTERNET-USERS \[ HR-NET IT-NET \]  
@@ -991,7 +998,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
   - INBOUND-DNS from outside to dmz, destination DNS-SVR, application dns, allow  
   - JUMP-SSH-IN from outside to dmz, destination JUMP-SVR, application ssh, service application-default, allow  
     - allows external admins to ssh into the jump host. The router maps public tcp/2222 to .84:22, the PA checks that it really is ssh  
-  - INTERNAL-TO-DNS from inside to dmz, source INTERNET-USERS, destination DNS-SVR, application dns, allow  
+  - INTERNAL-TO-DNS from inside to dmz, source INTERNET-USERS, destination \[ DNS-SVR CACHE-DNS \], application dns, allow  
   - INTERNAL-TO-WEB from inside to dmz, source INTERNET-USERS, destination WEB-SVR, application \[ web-browsing ssl \], allow  
   - IT-TO-JUMP-SSH from inside to dmz, source IT-NET, destination \[ JUMP-SVR JUMP2-SVR \], application ssh, allow  
   - PTSO-HR-TO-FILE, PTSO-STAFF-ATM-SVR and PTSO-DHCP-RELAY (inside -> server) removed 5 Nov with the PA's server interface. Internal-server access is enforced by the ASA only.  
@@ -999,7 +1006,7 @@ lecture recommends NetFlow collector by mangeEngine which we can implement in ta
     - also covers users arriving over the eth1/6/7 bypass (same zone inside) when the ASA is down  
   - TXN-INTERNET-TIMED from inside to \[ outside dmz \], source TXN-SVR, application \[ web-browsing ssl dns \], schedule TXN-WINDOW, allow  
   - DMZ-OUTBOUND-NTP from dmz to outside, source \[ JUMP-SVR JUMP2-SVR \], application \[ ntp dns \], allow  
-  - DNS-SVR-FORWARD from dmz to outside, source DNS-SVR, destination \[ ICT-DNS DNS-FORWARDERS-1 DNS-FORWARDERS-2 \], application dns, allow  
+  - DNS-SVR-FORWARD from dmz to outside, source \[ DNS-SVR CACHE-DNS \], destination \[ ICT-DNS DNS-FORWARDERS-1 DNS-FORWARDERS-2 \], application dns, allow  
     - lets the DNS server recurse for HR/IT through its forwarders  
   - DENY-ALL rule-type interzone from any to any, deny, log-end yes  
     - default deny all at the end  

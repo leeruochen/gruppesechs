@@ -1,6 +1,7 @@
 ; =====================================================================
-; Tera Term Macro Script for Firepower 1010 (ASA) PTSO Configuration
-; Dedicated routed /30 links to BOTH DSWs (E1/3 -> DSW1, E1/4 -> DSW2)
+; ASA-1010 (Firepower 1010) - inside firewall
+; Sits between the DSWs and the PA. Gateway and firewall for the internal
+; servers (VLAN 69). One routed /30 to each DSW (E1/3 -> DSW1, E1/4 -> DSW2).
 ; =====================================================================
 
 ; Enter enable mode
@@ -14,7 +15,7 @@ wait '#'
 sendln 'configure terminal'
 wait '#'
 
-; Base System Setup
+; Base system settings
 sendln 'hostname ASA-1010'
 wait '#'
 sendln 'domain-name gruppesechs.sitict.net'
@@ -24,7 +25,7 @@ wait '#'
 sendln 'banner motd WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS ASA IS PROHIBITED.'
 wait '#'
 
-; 1. Clear Pre-existing AAA & RSA Keypairs
+; 1. Clear old AAA config and regenerate the RSA key
 sendln 'clear configure aaa'
 wait '#'
 sendln 'crypto key zeroize rsa'
@@ -34,7 +35,7 @@ wait '#'
 sendln 'crypto key generate rsa modulus 2048 noconfirm'
 wait '#'
 
-; 2. Passwords & Local RBAC Accounts (Cleartext input hashed by ASA)
+; 2. Enable password and local accounts (privilege 15 admin, privilege 5 engineers)
 sendln 'enable password 4Venison2'
 wait '#'
 sendln 'username bigDonkBonkAdmin password Venison2Beef privilege 15'
@@ -59,18 +60,12 @@ wait '#'
 sendln 'privilege cmd level 5 mode exec command traceroute'
 wait '#'
 
-; 3. Clean up Factory Defaults
-; NOTE: 'no interface Port-channel1' / 'no interface Vlan100' removed - they
-; error on a clean box where those objects do not exist. If a prior run left
-; them behind, remove them manually before running this macro.
+; 3. Remove factory defaults
 sendln 'clear configure dhcpd'
 wait '#'
 
-; CRITICAL (PTSO): remove the factory default dynamic NAT. Without this, the ASA
-; PATs all inside->outside traffic to its own outside interface (172.16.0.106),
-; which breaks the serial design - HR must traverse the ASA UN-NAT'd so the
-; edge routers (R1/R2) do the only outbound PAT. Return traffic for
-; .106 has no internet path, so leaving this in place silently blackholes HR.
+; Remove the factory NAT. Otherwise the ASA translates all inside traffic to its
+; own outside address, which has no route back. NAT is done on R1/R2 only.
 sendln 'object network obj_any'
 wait '#'
 sendln 'no nat (any,outside) dynamic interface'
@@ -91,8 +86,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 4. Routed Transit Interfaces
-; Primary Serial Link to PA-440 (eth1/3 - Cost 10)
+; 4. Routed transit interfaces
+; E1/1 outside -> PA eth1/3 (172.16.0.104/30), cost 10: the normal path
 sendln 'interface Ethernet1/1'
 wait '#'
 sendln 'description Primary_Serial_Link_to_PA440_eth1_3'
@@ -113,7 +108,7 @@ sendln 'no shutdown'
 wait '#'
 sendln 'ospf cost 10'
 wait '#'
-; OSPF MD5 (HARDENING.md 7). Must match the router/PA/DSW end.
+; OSPF MD5 (must match the other end of the link)
 sendln 'ospf authentication message-digest'
 wait '#'
 sendln 'ospf message-digest-key 1 md5 GsOspf2026'
@@ -121,11 +116,10 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; PA-Bypass Links to the routers (cost 500, used only when the PA is down)
+; PA bypass links to the routers, cost 500 (only used when the PA is down):
 ;   E1/2 wan-backup  -> R2 G0/1/1  172.16.0.112/30 (ASA .114, R2 .113)
 ;   E1/5 wan-backup2 -> R1 G0/1/1  172.16.0.108/30 (ASA .110, R1 .109)
-; With the PA down, the ASA prefers R1 (ISP1 default metric 10 vs R2's 50).
-; (5 Nov: R2's end moved from G0/0/0 to G0/1/1, G0/0/0 is now ISP2.)
+; With the PA down the ASA prefers R1 (ISP1 default metric 10 vs 50).
 sendln 'interface Ethernet1/2'
 wait '#'
 sendln 'description PA_Bypass_Link_to_R2_G0_1_1'
@@ -146,7 +140,7 @@ sendln 'no shutdown'
 wait '#'
 sendln 'ospf cost 500'
 wait '#'
-; OSPF MD5 (HARDENING.md 7). Must match the router/PA/DSW end.
+; OSPF MD5 (must match the other end of the link)
 sendln 'ospf authentication message-digest'
 wait '#'
 sendln 'ospf message-digest-key 1 md5 GsOspf2026'
@@ -154,15 +148,11 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Routed Inside Transit Links, one /30 per DSW (5 Nov redesign)
-; Two routed ports can't share a subnet, which is why E1/4 used to be shut.
-; Giving each DSW its own /30 removes that limit:
-;   E1/3 inside  -> DSW1 G1/0/11  172.16.0.96/30   (ASA .97,  DSW1 .98)
-;   E1/4 inside2 -> DSW2 G1/0/11  172.16.0.100/30  (ASA .101, DSW2 .102)
-; Both carry the same INSIDE_IN ACL, so users are
-; treated identically whichever DSW they enter through. The DSWs advertise each
-; user VLAN cheaper from its HSRP Active switch, so return traffic leaves on
-; the same interface the outbound traffic arrived on.
+; Inside links, one /30 per DSW:
+;   E1/3 inside  -> DSW1 Gi1/0/11  172.16.0.96/30   (ASA .97,  DSW1 .98)
+;   E1/4 inside2 -> DSW2 Gi1/0/11  172.16.0.100/30  (ASA .101, DSW2 .102)
+; Both use the same INSIDE_IN ACL. Each DSW advertises its HSRP Active VLANs
+; cheaper, so return traffic leaves on the same link it came in on.
 sendln 'interface Ethernet1/3'
 wait '#'
 sendln 'description Inside_Transit_to_DSW1_G1_0_11'
@@ -183,7 +173,7 @@ sendln 'no shutdown'
 wait '#'
 sendln 'ospf cost 10'
 wait '#'
-; OSPF MD5 (HARDENING.md 7). Must match the router/PA/DSW end.
+; OSPF MD5 (must match the other end of the link)
 sendln 'ospf authentication message-digest'
 wait '#'
 sendln 'ospf message-digest-key 1 md5 GsOspf2026'
@@ -211,7 +201,7 @@ sendln 'no shutdown'
 wait '#'
 sendln 'ospf cost 10'
 wait '#'
-; OSPF MD5 (HARDENING.md 7). Must match the router/PA/DSW end.
+; OSPF MD5 (must match the other end of the link)
 sendln 'ospf authentication message-digest'
 wait '#'
 sendln 'ospf message-digest-key 1 md5 GsOspf2026'
@@ -239,7 +229,7 @@ sendln 'no shutdown'
 wait '#'
 sendln 'ospf cost 500'
 wait '#'
-; OSPF MD5 (HARDENING.md 7). Must match the router/PA/DSW end.
+; OSPF MD5 (must match the other end of the link)
 sendln 'ospf authentication message-digest'
 wait '#'
 sendln 'ospf message-digest-key 1 md5 GsOspf2026'
@@ -247,10 +237,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 5. Internal Servers Switchport and SVI
-; E1/6 is cabled DIRECTLY to Proxmox eno2 (vmbr1) since 5 Nov, not via DSW1.
-; The servers have one gateway (.73) and no backup, so a switch in between
-; added nothing. Untagged access VLAN 69 on both ends; the SVI is unchanged.
+; 5. Internal servers: E1/6 is cabled straight to the Proxmox host (VLAN 69,
+; untagged). The servers use .73 as their only gateway.
 sendln 'interface Ethernet1/6'
 wait '#'
 sendln 'description Direct_to_Supermicro_eno2_vmbr1_VLAN69'
@@ -279,13 +267,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; E1/7 used to carry the DMZ-backup SVI (Vlan92 'dmz', .86). REMOVED 5 Nov.
-; A second firewall interface in the DMZ subnet gave the ASA a connected route
-; that beat OSPF and skipped the PA (P1), and the DMZ servers can only have one
-; gateway (.81) because the ASA and PA can't share an address. The DMZ now
-; belongs to the PA only: if the PA fails, the DMZ is down by design.
-; On a live box that still has it, run 'no interface Vlan92' first (see
-; HANDOVER.md, migration steps).
+; Unused ports
 sendln 'interface Ethernet1/7'
 wait '#'
 sendln 'description UNUSED_PORT'
@@ -304,7 +286,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 6. Dedicated OOB Management Interface (Connected to DSW2 G1/0/23)
+; 6. OOB management interface (to DSW2 Gi1/0/23)
 sendln 'interface Management1/1'
 wait '#'
 sendln 'description OOB_Management_VLAN99'
@@ -322,28 +304,15 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Static Route for Management OOB
-; STATIC ROUTE: REQUIRED (OSPF does NOT provide it).
-; Management1/1 is management-only and not part of OSPF, so management-plane
-; traffic needs its own default. The data-plane default via the PA (.105) is
-; learned from OSPF (R1's default-information originate), so no static is
-; needed for user traffic on the ASA.
+; Default route for management traffic (via R1). Required: the management
+; interface isn't part of OSPF.
 sendln 'route management 0.0.0.0 0.0.0.0 172.16.0.33 1'
 wait '#'
 
-; 7. OSPF Routing (Area 0)
-; ROOT-CAUSE FIX for 'ip_multicast_ctl failed to get channel 6/7':
-;   On the Firepower 1010 ASA, OSPF cannot join its multicast groups
-;   (224.0.0.5/6) on VLAN SVIs that are backed by switchports. Vlan69 (server,
-;   on E1/6) and the old Vlan92 (dmz, removed 5 Nov) are such SVIs, so enabling OSPF
-;   on them threw this error (confirmed: it fired even on 'clear configure
-;   router ospf', i.e. on teardown - ruling out a paste-speed/scale cause).
-;   OSPF adjacencies are only NEEDED on the ROUTED PHYSICAL transit links:
-;     inside (E1/3 -> DSW1), inside2 (E1/4 -> DSW2), outside (E1/1 -> PA),
-;     wan-backup (E1/2 -> R2), wan-backup2 (E1/5 -> R1).
-;   So we DO NOT run OSPF on the server SVI; instead 'redistribute connected
-;   subnets' advertises 172.16.0.72/29 into the domain as an external route.
-;   Expected neighbors (all FULL, point-to-point /30s): DSW1, DSW2, PA, R2.
+; 7. OSPF area 0 on the routed transit links only. The Firepower can't run OSPF
+; on switchport-backed VLAN interfaces (multicast join fails), so the server
+; subnet is advertised with 'redistribute connected' instead.
+; Expected neighbours: DSW1, DSW2, PA, R1, R2.
 sendln 'router ospf 1'
 wait '#'
 sendln 'router-id 5.5.5.5'
@@ -365,7 +334,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 8. Network Objects & Object-Groups
+; 8. Network objects and groups
 sendln 'object network STAFF'
 wait '#'
 sendln 'subnet 172.16.0.0 255.255.255.224'
@@ -457,6 +426,14 @@ wait '#'
 sendln 'exit'
 wait '#'
 
+; Caching DNS VM108 (9 Nov)
+sendln 'object network CACHE-DNS'
+wait '#'
+sendln 'host 172.16.0.86'
+wait '#'
+sendln 'exit'
+wait '#'
+
 sendln 'object network JUMP-SVR'
 wait '#'
 sendln 'host 172.16.0.84'
@@ -489,7 +466,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; DSW1 / DSW2 addresses on their ASA links (E1/3, E1/4).
+; DSW1 / DSW2 addresses on their ASA links
 sendln 'object-group network DSWs'
 wait '#'
 sendln 'network-object host 172.16.0.98'
@@ -499,8 +476,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Every DSW address that can source a DHCP relay (P2 fix): each VLAN SVI on
-; both DSWs plus the DSWs' ASA-link addresses (.98 DSW1, .102 DSW2).
+; Every DSW address that can relay DHCP: each VLAN SVI on both DSWs plus their
+; ASA-link addresses.
 sendln 'object-group network DSW-SVIS'
 wait '#'
 sendln 'network-object host 172.16.0.2'
@@ -535,12 +512,10 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 9. NAT: none on the ASA (5 Nov). NAT moved to R1/R2, so the ASA's old
-; standby PAT (PAT-USERS -> PUB-PAT on wan-backup) and its objects were
-; removed. When the PA is down, traffic goes ASA -> R1 (or R2) un-NAT'd and the
-; router translates it, the same as traffic coming from the PA.
-
-; 10. Time-Range for Transactions Server
+; 9. No NAT on the ASA (R1/R2 translate). When the PA is down, traffic goes
+; ASA -> R1/R2 untranslated and the router NATs it.
+;
+; 10. Time window for the Transactions server's internet access
 sendln 'time-range TXN-WINDOW'
 wait '#'
 sendln 'periodic weekdays 01:00 to 03:00'
@@ -548,13 +523,10 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 11. Access Control Lists (ACLs)
+; 11. Access lists
 sendln 'access-list INSIDE_IN extended permit ospf any any'
 wait '#'
-; DHCP relay (P2 fix, verified 4 Nov): the DSWs relay with the client VLAN's SVI
-; as the source/giaddr, not only their transit addresses, so the old
-; 'DSWs'-only line dropped every relayed request. DSW-SVIS covers all of them.
-; Applied to both inside and inside2 (same ACL).
+; DHCP relay. The DSWs relay from each VLAN's SVI, not only their link address.
 sendln 'access-list INSIDE_IN extended permit udp object-group DSW-SVIS object DHCP-SVR eq bootps'
 wait '#'
 sendln 'access-list INSIDE_IN extended permit tcp object HR object FILE-SVR eq 445'
@@ -564,6 +536,10 @@ wait '#'
 sendln 'access-list INSIDE_IN extended permit ip object-group STAFF-ATM object ACCT-SVR'
 wait '#'
 sendln 'access-list INSIDE_IN extended permit ip object-group STAFF-ATM object TXN-SVR'
+wait '#'
+sendln 'access-list INSIDE_IN extended permit udp object-group HR-IT object CACHE-DNS eq domain'
+wait '#'
+sendln 'access-list INSIDE_IN extended permit tcp object-group HR-IT object CACHE-DNS eq domain'
 wait '#'
 sendln 'access-list INSIDE_IN extended permit udp object-group HR-IT object DNS-SVR eq domain'
 wait '#'
@@ -586,11 +562,14 @@ wait '#'
 sendln 'access-list INSIDE_IN extended deny ip any any log'
 wait '#'
 
-; DHCP relay return (P2 fix, verified 4 Nov): lets the server's OFFER/ACK back
-; to the relaying DSW SVI. Needed when the reply goes to a different DSW address
-; (giaddr) than the one the request came from, so the ASA has no matching
-; connection. Must stay ABOVE the SERVERS -> INTERNAL deny below.
+; DHCP replies back to the relaying DSW SVI. Needed when the reply goes to a
+; different DSW address than the request came from. Must stay above the
+; SERVERS -> INTERNAL deny.
 sendln 'access-list SERVER_IN extended permit udp object DHCP-SVR eq bootps object-group DSW-SVIS eq bootps'
+wait '#'
+; Wazuh agents on the internal servers -> manager on the jump host (tcp/1514
+; data, tcp/1515 enrolment). Must stay above the SERVERS -> INTERNAL deny.
+sendln 'access-list SERVER_IN extended permit tcp object SERVERS object JUMP-SVR range 1514 1515'
 wait '#'
 sendln 'access-list SERVER_IN extended deny ip object SERVERS object INTERNAL log'
 wait '#'
@@ -603,15 +582,14 @@ wait '#'
 sendln 'access-list SERVER_IN extended deny ip any any log'
 wait '#'
 
-; DMZ_IN and the OUTSIDE_IN web/DNS/jump-SSH permits were REMOVED 5 Nov with
-; the ASA's DMZ interface. They only applied to the standby DMZ path.
+; Nothing inbound from the PA or the routers except OSPF; replies are allowed
+; by the stateful connection table.
 sendln 'access-list OUTSIDE_IN extended permit ospf any any'
 wait '#'
 sendln 'access-list OUTSIDE_IN extended deny ip any any log'
 wait '#'
 
-; Bind ACLs to Interfaces
-; inside (DSW1) and inside2 (DSW2) share INSIDE_IN: same users, same rules.
+; Apply the ACLs. inside (DSW1) and inside2 (DSW2) share INSIDE_IN.
 sendln 'access-group INSIDE_IN in interface inside'
 wait '#'
 sendln 'access-group INSIDE_IN in interface inside2'
@@ -625,7 +603,7 @@ wait '#'
 sendln 'access-group OUTSIDE_IN in interface wan-backup2'
 wait '#'
 
-; 12. Modular Policy Framework (MPF) - Stateful ICMP Inspection
+; 12. Stateful ICMP inspection
 sendln 'policy-map global_policy'
 wait '#'
 sendln 'class inspection_default'
@@ -639,9 +617,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 12b. SYN flood + Slowloris limits for the internal servers (HARDENING.md 5.1,
-; labs 2.5/2.6). embryonic limits = SYN flood, per-client-max = Slowloris.
-; Interface policies run alongside global_policy (ICMP inspection unaffected).
+; SYN flood and Slowloris limits for the internal servers: embryonic limits
+; stop SYN floods, per-client-max stops Slowloris.
 sendln 'access-list MPF_INTERNAL_SVRS extended permit tcp any object SERVERS'
 wait '#'
 sendln 'class-map CM_SVR_PROTECT'
@@ -671,7 +648,8 @@ wait '#'
 sendln 'threat-detection statistics tcp-intercept'
 wait '#'
 
-; 13. AAA, SSH, NTP & Syslog over OOB Management
+; 13. AAA (two TACACS+ servers), SSH, NTP and syslog, all over the management
+; interface
 sendln 'aaa-server TACACS protocol tacacs+'
 wait '#'
 sendln 'aaa-server TACACS (management) host 172.16.0.44'
@@ -690,14 +668,23 @@ wait '#'
 
 sendln 'aaa authentication ssh console TACACS LOCAL'
 wait '#'
+; Console login with a username. Without it, a console 'enable' session has no
+; username, so TACACS command authorization refuses every command.
+sendln 'aaa authentication serial console TACACS LOCAL'
+wait '#'
 sendln 'aaa authentication enable console TACACS LOCAL'
 wait '#'
-; HARDENING.md 5.3: lock a local account after 5 failed logins (privilege-15
-; accounts are exempt). Unlock: clear aaa local user lockout username <user>
+; Lock a local account after 5 failed logins (privilege 15 is exempt).
+; Unlock: clear aaa local user lockout username <user>
 sendln 'aaa local authentication attempts max-fail 5'
 wait '#'
-; Re-enabled 7 Nov (both TACACS servers verified). Keep a console session open
-; when rebuilding in case tac_plus is down (P13).
+; Use the privilege level TACACS returns (admin 15, engineer 7) and log users
+; straight into privileged mode, so engineers don't need an enable password.
+sendln 'aaa authorization exec authentication-server auto-enable'
+wait '#'
+; Every command is checked by TACACS. Falls back to the local accounts only when
+; TACACS is unreachable (not when it denies). Keep a console session open when
+; rebuilding in case TACACS is down.
 sendln 'aaa authorization command TACACS LOCAL'
 wait '#'
 sendln 'aaa accounting command TACACS'
@@ -712,9 +699,9 @@ wait '#'
 sendln 'no http server enable'
 wait '#'
 
-; NTP authentication (HARDENING.md 5.4). Key must match chrony on VM102/VM106.
-; To change the key later, enter the new 'ntp authentication-key 1' line only:
-; 'no ntp authentication-key 1 ...' deletes key 1 whatever its value.
+; Authenticated NTP from the jump hosts (key must match chrony on VM102/VM106).
+; To change the key, just enter a new 'ntp authentication-key 1' line:
+; 'no ntp authentication-key 1' deletes the key whatever value you type.
 sendln 'ntp authentication-key 1 md5 bigBoyNTPkey'
 wait '#'
 sendln 'ntp trusted-key 1'
@@ -732,22 +719,18 @@ sendln 'logging timestamp'
 wait '#'
 sendln 'logging trap informational'
 wait '#'
-; Local copy in RAM (show logging) and logs to SSH sessions after 'terminal monitor'.
-; Console logging is off by default on the ASA; no 'logging synchronous' exists.
+; Keep a copy of the logs in RAM. Use 'terminal monitor' to see them over SSH.
 sendln 'logging buffered informational'
 wait '#'
 sendln 'logging monitor informational'
 wait '#'
-; NOTE: "logging host interface conflicts with route table entry" warning is
-; EXPECTED. The syslog hosts .44/.45 sit in the management interface's own
-; connected subnet (172.16.0.32/28), so pinning the 'management' interface is
-; redundant from the ASA's view - but we keep it explicit to guarantee OOB
-; isolation and prevent syslog ever egressing a data interface.
+; Syslog to both jump hosts over the management interface. The "conflicts with
+; route table entry" warning is expected and harmless.
 sendln 'logging host management 172.16.0.44'
 wait '#'
 sendln 'logging host management 172.16.0.45'
 wait '#'
 
-; End configuration
+; End of configuration
 sendln 'end'
 wait '#'

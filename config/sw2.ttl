@@ -1,5 +1,6 @@
 ; =====================================================================
-; Tera Term Macro Script for SW2 Configuration
+; SW2 - ATM access switch (VLAN 46)
+; Run from the console on a wiped switch.
 ; =====================================================================
 
 ; Enter enable mode
@@ -13,7 +14,7 @@ wait '#'
 sendln 'configure terminal'
 wait '#'
 
-; Base System Setup
+; Base system settings
 sendln 'hostname SW2'
 wait '#'
 sendln 'no ip domain lookup'
@@ -24,26 +25,24 @@ sendln 'service password-encryption'
 wait '#'
 sendln 'service timestamps log datetime msec localtime'
 wait '#'
-; Syslog: no console logging (keeps macro/console output clean). Logs still go to
-; the RAM buffer (show logging) and the syslog servers.
+; No console logging (keeps the macro output readable). Logs still go to the
+; RAM buffer and the syslog servers.
 sendln 'no logging console'
 wait '#'
 sendln 'clock timezone SGT 8 0'
 wait '#'
 
-; Banner MOTD
-; One line, '$' as the delimiter. The old '^C' was sent as two literal
-; characters, so IOS used '^' as the delimiter and printed a stray 'C'.
+; Login banner ('$' is the delimiter)
 sendln 'banner motd $WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS SW2 IS PROHIBITED.$'
 wait '#'
 
-; 1. Root Enable Secret & Manager Local Account
+; 1. Enable secret and local admin account
 sendln 'enable algorithm-type scrypt secret 4Venison2'
 wait '#'
 sendln 'username bigDonkBonkAdmin privilege 15 algorithm-type scrypt secret Venison2Beef'
 wait '#'
 
-; 2. Shut Down Unused Rear Gi0/0 Port
+; 2. Shut the unused rear Gi0/0 port
 sendln 'interface GigabitEthernet0/0'
 wait '#'
 sendln 'shutdown'
@@ -51,7 +50,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 3. VLAN Definitions & Spanning Tree
+; 3. VLANs and spanning tree
 sendln 'vlan 46'
 wait '#'
 sendln 'name ATM'
@@ -74,7 +73,7 @@ wait '#'
 sendln 'spanning-tree mode rapid-pvst'
 wait '#'
 
-; 4. Global DHCP Snooping & Dynamic ARP Inspection (DAI)
+; 4. DHCP snooping and Dynamic ARP Inspection
 sendln 'ip dhcp snooping'
 wait '#'
 sendln 'ip dhcp snooping vlan 46'
@@ -83,10 +82,10 @@ sendln 'no ip dhcp snooping information option'
 wait '#'
 sendln 'ip arp inspection vlan 46'
 wait '#'
-; HARDENING.md 4.3: DAI also checks MACs and drops invalid IPs in ARP.
+; DAI also checks MAC addresses and drops ARP packets with invalid IPs.
 sendln 'ip arp inspection validate src-mac dst-mac ip'
 wait '#'
-; HARDENING.md 4.2: bring err-disabled ports back after 300 s.
+; Err-disabled ports come back by themselves after 300 s.
 sendln 'errdisable recovery cause psecure-violation'
 wait '#'
 sendln 'errdisable recovery cause bpduguard'
@@ -98,7 +97,7 @@ wait '#'
 sendln 'errdisable recovery interval 300'
 wait '#'
 
-; 5. LACP Uplinks (Po1 to DSW1, Po2 to DSW2)
+; 5. LACP uplinks: Po1 to DSW1, Po2 to DSW2
 ; Towards DSW1
 sendln 'interface range GigabitEthernet1/0/1 - 2'
 wait '#'
@@ -157,7 +156,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 6. ATM End-User Access Ports (G1/0/5 - 7)
+; 6. ATM user ports (Gi1/0/5 - 7)
 sendln 'interface range GigabitEthernet1/0/5 - 7'
 wait '#'
 sendln 'description ATM_Terminals_VLAN46'
@@ -168,13 +167,18 @@ sendln 'switchport access vlan 46'
 wait '#'
 sendln 'switchport nonegotiate'
 wait '#'
+; Port security stops MAC flooding: at most 5 MACs per port. MACs are learned
+; dynamically and age out after 5 minutes idle. Extra MACs are dropped and
+; logged ('restrict') without shutting the port.
 sendln 'switchport port-security'
 wait '#'
 sendln 'switchport port-security maximum 5'
 wait '#'
-sendln 'switchport port-security mac-address sticky'
+sendln 'switchport port-security violation restrict'
 wait '#'
-sendln 'switchport port-security violation shutdown'
+sendln 'switchport port-security aging time 5'
+wait '#'
+sendln 'switchport port-security aging type inactivity'
 wait '#'
 sendln 'spanning-tree portfast'
 wait '#'
@@ -184,10 +188,10 @@ sendln 'ip verify source'
 wait '#'
 sendln 'ip arp inspection limit rate 15'
 wait '#'
-; HARDENING.md 4.1: DHCP starvation (DHCPig) err-disables the port above 10 pps.
+; DHCP starvation protection: over 10 DHCP packets/s err-disables the port.
 sendln 'ip dhcp snooping limit rate 10'
 wait '#'
-; HARDENING.md 4.4: storm control (log only) and no CDP to user laptops.
+; Storm control (log only) and no CDP towards user devices.
 sendln 'storm-control broadcast level 5.00'
 wait '#'
 sendln 'storm-control multicast level 5.00'
@@ -201,7 +205,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 7. Unused Ports Blackholed (G1/0/8 - 24)
+; 7. Unused ports: parked in blackhole VLAN 727 and shut down
 sendln 'interface range GigabitEthernet1/0/8 - 24'
 wait '#'
 sendln 'description UNUSED_PORTS'
@@ -217,7 +221,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 8. OOB Management Interface (VLAN 99)
+; 8. Management interface (OOB VLAN 99)
 sendln 'interface Vlan99'
 wait '#'
 sendln 'description OOB_Management_SVI'
@@ -229,11 +233,12 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; for management vlan 99
+; Management gateway (R1's OOB interface)
 sendln 'ip default-gateway 172.16.0.33'
 wait '#'
 
-; 9. VTY ACL, AAA (Dual TACACS+), SSH, NTP & Syslog
+; 9. Management access: SSH only from the jump hosts, AAA with two TACACS+
+; servers, NTP and syslog
 sendln 'ip access-list standard MGMT-ONLY'
 wait '#'
 sendln 'permit host 172.16.0.44'
@@ -334,8 +339,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; The image has vty 16-31 open for SSH with no access-class, which would
-; bypass MGMT-ONLY. Close them. (Harmless error if this model has no vty 16+.)
+; This image also opens vty 16-31 for SSH without the ACL, so close them.
+; (Harmless error if the switch has no vty 16+.)
 sendln 'line vty 16 31'
 wait '#'
 sendln 'transport input none'
@@ -343,14 +348,14 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Web UI off (the school image turns it on; it isn't used).
+; Web UI off (enabled on the school image, not used)
 sendln 'no ip http server'
 wait '#'
 sendln 'no ip http secure-server'
 wait '#'
 
-; NTP authentication (HARDENING.md 1.3). No VRF on the access switches. Key must
-; match /etc/chrony/chrony.keys on VM102 and VM106 ('1 MD5 bigBoyNTPkey').
+; Authenticated NTP from the jump hosts. The key must match
+; /etc/chrony/chrony.keys on VM102 and VM106.
 sendln 'ntp authentication-key 1 md5 bigBoyNTPkey'
 wait '#'
 sendln 'ntp trusted-key 1'
@@ -381,21 +386,19 @@ sendln 'logging host 172.16.0.45'
 wait '#'
 sendln 'logging trap informational'
 wait '#'
-; Local copy in RAM if the syslog servers/OOB are down; logs to SSH sessions
-; after 'terminal monitor' (exec command, typed per session, not in the macro).
+; Keep a copy of the logs in RAM. Use 'terminal monitor' to see them over SSH.
 sendln 'logging buffered 64000 informational'
 wait '#'
 sendln 'logging monitor informational'
 wait '#'
 
-; End Phase 1 config
+; End of phase 1
 sendln 'end'
 wait '#'
 
 ; =====================================================================
-; PHASE 2: PARSER VIEW AND ROLE-BASED ACCESS
+; PHASE 2: parser view for the network engineers
 ; =====================================================================
-
 sendln 'enable view'
 wait 'Password:'
 sendln '4Venison2'
@@ -436,6 +439,6 @@ wait '#'
 sendln 'username donkBonkEng2 view eng-view algorithm-type scrypt secret Beef3Venison'
 wait '#'
 
-; End config
+; End of configuration
 sendln 'end'
 wait '#'

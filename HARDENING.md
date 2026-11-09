@@ -192,6 +192,8 @@ interface Vlan67
 
 ### 3.3 Final-hardening items already tracked in HANDOVER [notes]
 
+**Status: done 9 Nov** (live on both DSWs and removed from `dsw1.ttl` / `dsw2.ttl`; TEST-PLAN 10.1-10.3 pass). Commands kept for reference.
+
 These are the `TODO (FINAL HARDENING)` lines. Remove them on both DSWs when testing is done, and delete the same lines from `dsw1.ttl` / `dsw2.ttl`:
 ```
 ip access-list extended ACL_HR_IN
@@ -225,11 +227,7 @@ errdisable recovery cause arp-inspection
 errdisable recovery interval 300
 ```
 
-**About `maximum 5` (your choice, kept):** sticky MACs are written to the running-config and **never age out**. After the 5th different laptop, the 6th shuts the port. Errdisable recovery brings it back after 300 s, but the 6th laptop shuts it again. To free the slots, run:
-```
-clear port-security sticky interface GigabitEthernet1/0/5
-```
-(Or `clear port-security sticky` for all ports.) Check what's stored with `show port-security address`.
+**About `maximum 5` (your choice, kept):** ~~sticky MACs never age out~~ **Changed 9 Nov (live on SW1-SW4 and in the macros):** sticky was removed. Ports now learn up to 5 MACs dynamically, with `violation restrict` (drop and log, no err-disable) and `aging time 5` / `aging type inactivity`. Nothing has to be cleared by hand. Check with `show port-security address`.
 
 Also fix the stale comments: `sw3.ttl` line 142 and `sw4.ttl` line 142 say "Max 2 MAC". Change them to "Max 5 MAC".
 
@@ -321,6 +319,8 @@ ntp server 172.16.0.45 key 1 source management
 
 After tac_plus is verified (P13), un-comment `aaa authorization command TACACS LOCAL`. Keep a console session open while you do.
 
+**Status 9 Nov:** command authorization is on. It also needs the console lines `aaa authentication serial console TACACS LOCAL` + `aaa authentication enable console TACACS LOCAL` (otherwise a console session runs as `enable_15` and every command is denied) and `aaa authorization exec authentication-server auto-enable` (so engineers get their TACACS priv level). All in `firepower1010.ttl`; see HANDOVER fixes #29/#30.
+
 ---
 
 ## 6. PA-440
@@ -350,7 +350,8 @@ set zone outside network zone-protection-profile ZP-OUTSIDE
 ```
 - 8001 = TCP port scan, 8002 = host sweep, 8003 = UDP port scan. A scanning source is blocked for 300 s.
 - The rates count **new** sessions per second entering `outside`. Return traffic for HR/IT browsing doesn't count, so these low lab values won't affect users. An `hping3 --flood` or `tcpsynflood.py` run goes far over them.
-- **Demo:** run `nmap -sS 203.149.210.189` from outside, then `show dos-protection zone outside blocked source` (or Monitor > Block IP List). For the SYN flood, use `show counter global filter delta yes | match syn`.
+- **Demo:** run `nmap -sS -Pn --max-rate 80 -p 1-1000 203.149.210.189` from outside, then check Monitor > Block IP List / `show log threat`. For the SYN flood, use `show counter global filter delta yes | match syn`.
+- **Tested 9 Nov:** the scan block was **not** triggered (fast scans trip SYN cookies first and show false `open` ports; slow scans stay below the threshold). Needed the 1:1 web NAT on R1/R2 for scans to reach the PA at all. See `changes.md` Parts 3.5 and 15.2 and `DEMO-DAY.md` Scene 4.
 
 ### 6.2 Zone protection on `dmz`: contain a compromised server [extra]
 

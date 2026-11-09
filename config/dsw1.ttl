@@ -1,5 +1,8 @@
 ; =====================================================================
-; Tera Term Macro Script for DSW1 PTSO Configuration
+; DSW1 - distribution switch 1
+; HSRP Active for Staff (23) and ATM (46), Standby for HR (61) and IT (67).
+; Routed /30 links to the ASA (primary) and the PA (bypass).
+; Management runs in VRF OOB.
 ; =====================================================================
 
 ; Enter enable mode
@@ -13,7 +16,7 @@ wait '#'
 sendln 'configure terminal'
 wait '#'
 
-; Base System Setup
+; Base system settings
 sendln 'hostname DSW1'
 wait '#'
 sendln 'no ip domain lookup'
@@ -26,26 +29,24 @@ sendln 'service password-encryption'
 wait '#'
 sendln 'service timestamps log datetime msec localtime'
 wait '#'
-; Syslog: no console logging (keeps macro/console output clean). Logs still go to
-; the RAM buffer (show logging) and the syslog servers.
+; No console logging (keeps the macro output readable). Logs still go to the
+; RAM buffer and the syslog servers.
 sendln 'no logging console'
 wait '#'
 sendln 'clock timezone SGT 8 0'
 wait '#'
 
-; Banner MOTD
-; One line, '$' as the delimiter. The old '^C' was sent as two literal
-; characters, so IOS used '^' as the delimiter and printed a stray 'C'.
+; Login banner ('$' is the delimiter)
 sendln 'banner motd $WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS DSW1 IS PROHIBITED.$'
 wait '#'
 
-; 1. Root Enable Secret & Manager Local Account
+; 1. Enable secret and local admin account
 sendln 'enable algorithm-type scrypt secret 4Venison2'
 wait '#'
 sendln 'username bigDonkBonkAdmin privilege 15 algorithm-type scrypt secret Venison2Beef'
 wait '#'
 
-; 2. Out-of-Band (OOB) VRF Definition
+; 2. Out-of-band management VRF
 sendln 'vrf definition OOB'
 wait '#'
 sendln 'address-family ipv4'
@@ -55,7 +56,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 3. Shut Down Unused Rear Gi0/0 Port
+; 3. Shut the unused rear Gi0/0 port
 sendln 'interface GigabitEthernet0/0'
 wait '#'
 sendln 'shutdown'
@@ -63,7 +64,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 4. VLAN Definitions & Spanning Tree (Rapid-PVST)
+; 4. VLANs and spanning tree (Rapid PVST+)
 sendln 'vlan 23'
 wait '#'
 sendln 'name STAFF'
@@ -106,10 +107,8 @@ wait '#'
 sendln 'spanning-tree vlan 61,67 root secondary'
 wait '#'
 
-; 5. Object Tracking: this DSW's own path to the ASA (5 Nov redesign)
-; Pings the ASA across this switch's dedicated link (Gi1/0/11 -> ASA E1/3 .97).
-;   - HSRP (section 13) drops this DSW's priority by 30 when it fails, so the
-;     user VLANs move to DSW2, which still has its own ASA link.
+; 5. Track this switch's own link to the ASA (ping .97 over Gi1/0/11).
+; If it fails, HSRP lowers DSW1's priority by 30 and the user VLANs move to DSW2.
 sendln 'ip sla 10'
 wait '#'
 sendln 'icmp-echo 172.16.0.97 source-interface GigabitEthernet1/0/11'
@@ -125,8 +124,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 6. LACP EtherChannels (Po1-Po4 to Access Switches, Po5 to DSW2)
-; Towards SW1 (Staff VLAN 23)
+; 6. LACP EtherChannels: Po1-Po4 to the access switches, Po5 to DSW2
+; Towards SW1 (Staff, VLAN 23)
 sendln 'interface range GigabitEthernet1/0/1 - 2'
 wait '#'
 sendln 'description Uplink_to_SW1'
@@ -153,7 +152,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Towards SW2 (ATM VLAN 46)
+; Towards SW2 (ATM, VLAN 46)
 sendln 'interface range GigabitEthernet1/0/3 - 4'
 wait '#'
 sendln 'description Uplink_to_SW2'
@@ -180,7 +179,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Towards SW3 (HR VLAN 61)
+; Towards SW3 (HR, VLAN 61)
 sendln 'interface range GigabitEthernet1/0/5 - 6'
 wait '#'
 sendln 'description Uplink_to_SW3'
@@ -207,7 +206,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Towards SW4 (IT VLAN 67)
+; Towards SW4 (IT, VLAN 67)
 sendln 'interface range GigabitEthernet1/0/7 - 8'
 wait '#'
 sendln 'description Uplink_to_SW4'
@@ -234,7 +233,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Inter-Switch Trunk Towards DSW2
+; Towards DSW2 (Po5 trunk)
 sendln 'interface range GigabitEthernet1/0/9 - 10'
 wait '#'
 sendln 'description InterSwitch_Link_to_DSW2'
@@ -259,12 +258,10 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 7. Firewall Transit Ports: routed point-to-point /30s (5 Nov redesign)
-; Each firewall link is its own subnet, so there is no shared Layer 2 segment
-; and no loop (the old VLAN 100 bypass looped through PA eth1/6/7).
-;   Gi1/0/11 -> ASA E1/3  172.16.0.96/30  (DSW1 .98, ASA .97)   cost 10  primary
-;   Gi1/0/12 -> PA eth1/6 172.16.0.116/30 (DSW1 .118, PA .117)  cost 500 bypass
-; The PA link is only used if the ASA is unreachable from BOTH DSWs.
+; 7. Routed /30 links to the firewalls
+;   Gi1/0/11 -> ASA E1/3   172.16.0.96/30   (DSW1 .98, ASA .97)   cost 10, primary
+;   Gi1/0/12 -> PA eth1/6  172.16.0.116/30  (DSW1 .118, PA .117)  cost 500, bypass
+; The PA link only carries traffic if the ASA is unreachable from both DSWs.
 sendln 'interface GigabitEthernet1/0/11'
 wait '#'
 sendln 'description Routed_Transit_to_ASA_E1_3'
@@ -275,7 +272,7 @@ sendln 'ip address 172.16.0.98 255.255.255.252'
 wait '#'
 sendln 'ip ospf cost 10'
 wait '#'
-; OSPF MD5 (HARDENING.md 7). Must match the other end of this link.
+; OSPF MD5 (must match the other end of the link)
 sendln 'ip ospf authentication message-digest'
 wait '#'
 sendln 'ip ospf message-digest-key 1 md5 GsOspf2026'
@@ -299,7 +296,7 @@ sendln 'ip address 172.16.0.118 255.255.255.252'
 wait '#'
 sendln 'ip ospf cost 500'
 wait '#'
-; OSPF MD5 (HARDENING.md 7). Must match the other end of this link.
+; OSPF MD5 (must match the other end of the link)
 sendln 'ip ospf authentication message-digest'
 wait '#'
 sendln 'ip ospf message-digest-key 1 md5 GsOspf2026'
@@ -313,15 +310,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 8. (Removed 5 Nov) Internal servers no longer pass through DSW1.
-; Each server zone has one gateway firewall and no backup, so the DSW hop
-; added nothing. Proxmox eno2 (vmbr1, VLAN 69) is cabled straight to ASA E1/6.
-; VLAN 69 no longer exists on the DSWs.
-
-; 9. Unused Ports Blackholed (G1/0/13 - 20)
-; G1/0/13-14 were Supermicro eno2 and ASA E1/6 (VLAN 69 bridge).
-; G1/0/15 was the PA eth1/8 server-backup link. Unplug all three cables.
-; G1/0/21 is the management laptop port (section 9b), not unused.
+; 8. Unused ports: parked in blackhole VLAN 727 and shut down
 sendln 'interface range GigabitEthernet1/0/13 - 20'
 wait '#'
 sendln 'description UNUSED_PORTS'
@@ -337,8 +326,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 9b. Management laptop port (VLAN 99). Laptop: 172.16.0.46/28, gateway .33.
-; Use this instead of Proxmox LAN 4 (HANDOVER.md section 4).
+; 9. Management laptop port (VLAN 99). Laptop: 172.16.0.46/28, gateway .33.
 sendln 'interface GigabitEthernet1/0/21'
 wait '#'
 sendln 'description OOB_Mgmt_Workstation'
@@ -358,7 +346,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 10. Dedicated OOB Management Ports (G1/0/22 - 24)
+; 10. OOB management ports (VLAN 99)
 sendln 'interface range GigabitEthernet1/0/22 - 24'
 wait '#'
 sendln 'description OOB_MGMT_DEVICES_R1_PA_PROXMOX'
@@ -378,21 +366,15 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 11. Inter-VLAN Security ACLs & VTY Management ACL
+; 11. User VLAN ACLs (applied inbound on each SVI) and the management ACL
 sendln 'ip access-list extended ACL_STAFF_IN'
 wait '#'
-; HSRP v2 hellos from the peer DSW (P10 fix, confirmed 4 Nov). This ACL is
-; applied inbound on the SVI, so it also filters the other DSW's hellos
-; (src .2/.3 -> 224.0.0.102 udp 1985). Without this line the final deny drops
-; them and BOTH DSWs go Active for the VLAN (duplicate gateway).
-; HR/IT ACLs don't need it: their final 'permit ip <subnet> any' covers it.
+; HSRP hellos from the other DSW. Without this the final deny drops them and
+; both DSWs go Active. (HR and IT don't need it: their final permit covers it.)
 sendln 'permit udp 172.16.0.0 0.0.0.31 host 224.0.0.102 eq 1985'
 wait '#'
-; DHCP relay replies for the PEER DSW (found 4 Nov). Both DSWs relay
-; client requests (helper on both SVIs). The ASA sends all replies for this
-; subnet to ONE DSW, which forwards replies meant for the other DSW's SVI across
-; the user VLAN, so they enter that SVI INBOUND and hit this ACL. Seen as
-; 'ACL_ATM_IN denied udp 172.16.0.77(67) -> 172.16.0.51(67)'.
+; DHCP replies meant for the other DSW. Both DSWs relay, but the ASA sends all
+; replies for a subnet through one DSW, so some cross the user VLAN into here.
 sendln 'permit udp host 172.16.0.77 eq bootps any eq bootps'
 wait '#'
 sendln 'permit udp any host 255.255.255.255 eq bootps'
@@ -410,10 +392,10 @@ wait '#'
 
 sendln 'ip access-list extended ACL_ATM_IN'
 wait '#'
-; HSRP v2 hellos from the peer DSW (P10 fix, confirmed 4 Nov). See ACL_STAFF_IN.
+; HSRP hellos from the other DSW (see ACL_STAFF_IN)
 sendln 'permit udp 172.16.0.48 0.0.0.7 host 224.0.0.102 eq 1985'
 wait '#'
-; DHCP relay replies for the peer DSW. See ACL_STAFF_IN.
+; DHCP replies meant for the other DSW (see ACL_STAFF_IN)
 sendln 'permit udp host 172.16.0.77 eq bootps any eq bootps'
 wait '#'
 sendln 'permit udp any host 255.255.255.255 eq bootps'
@@ -431,8 +413,8 @@ wait '#'
 
 sendln 'ip access-list extended ACL_HR_IN'
 wait '#'
-; DHCP relay replies for the peer DSW. See ACL_STAFF_IN. (HR's final
-; 'permit ip 172.16.0.56/29 any' does NOT cover source .77.)
+; DHCP replies meant for the other DSW (see ACL_STAFF_IN). HR's final permit
+; doesn't cover source .77, so this is still needed.
 sendln 'permit udp host 172.16.0.77 eq bootps any eq bootps'
 wait '#'
 sendln 'permit udp any host 255.255.255.255 eq bootps'
@@ -451,12 +433,13 @@ sendln 'permit tcp 172.16.0.56 0.0.0.7 host 172.16.0.82 eq www'
 wait '#'
 sendln 'permit tcp 172.16.0.56 0.0.0.7 host 172.16.0.82 eq 443'
 wait '#'
-; TODO (FINAL HARDENING): TEMPORARY testing permit. Remove this line once all
-; connectivity testing is complete. plan.md does not allow HR ICMP to arbitrary
-; destinations; without this line the anti-smurf deny below blocks HR pings to
-; internal/transit IPs (172.16.0.0/25), which is the intended final behaviour.
-sendln 'permit icmp 172.16.0.56 0.0.0.7 any'
+; Caching DNS VM108 (9 Nov)
+sendln 'permit udp 172.16.0.56 0.0.0.7 host 172.16.0.86 eq domain'
 wait '#'
+sendln 'permit tcp 172.16.0.56 0.0.0.7 host 172.16.0.86 eq domain'
+wait '#'
+; Block HR from all other internal subnets, including pings to gateways and
+; transit links. Internet traffic is allowed by the next line.
 sendln 'deny ip 172.16.0.56 0.0.0.7 172.16.0.0 0.0.0.127 log'
 wait '#'
 sendln 'permit ip 172.16.0.56 0.0.0.7 any'
@@ -466,7 +449,7 @@ wait '#'
 
 sendln 'ip access-list extended ACL_IT_IN'
 wait '#'
-; DHCP relay replies for the peer DSW. See ACL_STAFF_IN.
+; DHCP replies meant for the other DSW (see ACL_STAFF_IN)
 sendln 'permit udp host 172.16.0.77 eq bootps any eq bootps'
 wait '#'
 sendln 'permit udp any host 255.255.255.255 eq bootps'
@@ -485,10 +468,13 @@ sendln 'permit tcp 172.16.0.64 0.0.0.7 host 172.16.0.84 eq 22'
 wait '#'
 sendln 'permit tcp 172.16.0.64 0.0.0.7 host 172.16.0.85 eq 22'
 wait '#'
-; TODO (FINAL HARDENING): TEMPORARY testing permit. Remove once all testing is
-; complete (same reason as the HR ICMP line in ACL_HR_IN).
-sendln 'permit icmp 172.16.0.64 0.0.0.7 any'
+; Caching DNS VM108 (9 Nov)
+sendln 'permit udp 172.16.0.64 0.0.0.7 host 172.16.0.86 eq domain'
 wait '#'
+sendln 'permit tcp 172.16.0.64 0.0.0.7 host 172.16.0.86 eq domain'
+wait '#'
+; Block IT from all other internal subnets. Internet traffic is allowed by the
+; next line.
 sendln 'deny ip 172.16.0.64 0.0.0.7 172.16.0.0 0.0.0.127 log'
 wait '#'
 sendln 'permit ip 172.16.0.64 0.0.0.7 any'
@@ -507,7 +493,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 12. Flexible NetFlow v9 Configuration
+; 12. NetFlow v9, exported to both jump hosts over VRF OOB
 sendln 'flow record bank-flow-record'
 wait '#'
 sendln 'description packet flow record for monitoring'
@@ -590,9 +576,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 13. Switch Virtual Interfaces (SVIs) & HSRP
-; NetFlow on the routed firewall links (applied here, after section 12 defines
-; the flow monitor; referencing it earlier fails on a freshly wiped switch).
+; 13. SVIs and HSRP
+; NetFlow on the firewall links (needs the flow monitor from section 12)
 sendln 'interface range GigabitEthernet1/0/11 - 12'
 wait '#'
 sendln 'ip flow monitor bank-flow-monitor input'
@@ -600,9 +585,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Vlan100 is now a DSW1 <-> DSW2 routed transit over Po5 only (no firewall in
-; it). OSPF runs across it, so if DSW1 loses its ASA link, DSW1's own traffic
-; (and anything still arriving at it) reaches the ASA through DSW2.
+; DSW1 <-> DSW2 routed transit over Po5. If one DSW loses its ASA link, its
+; traffic reaches the ASA through the other DSW.
 sendln 'interface Vlan100'
 wait '#'
 sendln 'description DSW1_DSW2_Transit_over_Po5'
@@ -611,7 +595,7 @@ sendln 'ip address 172.16.0.125 255.255.255.252'
 wait '#'
 sendln 'ip ospf cost 10'
 wait '#'
-; OSPF MD5 (HARDENING.md 7). Must match the other end of this link.
+; OSPF MD5 (must match DSW2)
 sendln 'ip ospf authentication message-digest'
 wait '#'
 sendln 'ip ospf message-digest-key 1 md5 GsOspf2026'
@@ -633,9 +617,8 @@ sendln 'description Staff_VLAN_Gateway'
 wait '#'
 sendln 'ip address 172.16.0.2 255.255.255.224'
 wait '#'
-; OSPF cost matches HSRP: DSW1 is Active for 23/46, so it advertises them
-; cheaper (10) than DSW2 (20). The ASA then sends return traffic for Staff/ATM
-; to DSW1, the same switch the outbound traffic came from (symmetric).
+; DSW1 is HSRP Active for 23/46, so it advertises them cheaper (10, DSW2 uses
+; 20). Return traffic from the ASA then comes back through the same switch.
 sendln 'ip ospf cost 10'
 wait '#'
 sendln 'ip helper-address 172.16.0.77'
@@ -656,7 +639,7 @@ sendln 'standby 23 priority 110'
 wait '#'
 sendln 'standby 23 preempt'
 wait '#'
-; HSRP MD5 (HARDENING.md 3.1). Same key on DSW1 and DSW2.
+; HSRP MD5 (same key on both DSWs)
 sendln 'standby 23 authentication md5 key-string GsHsrp2026'
 wait '#'
 sendln 'standby 23 track 10 decrement 30'
@@ -692,7 +675,7 @@ sendln 'standby 46 priority 110'
 wait '#'
 sendln 'standby 46 preempt'
 wait '#'
-; HSRP MD5 (HARDENING.md 3.1). Same key on DSW1 and DSW2.
+; HSRP MD5 (same key on both DSWs)
 sendln 'standby 46 authentication md5 key-string GsHsrp2026'
 wait '#'
 sendln 'standby 46 track 10 decrement 30'
@@ -729,7 +712,7 @@ sendln 'standby 61 priority 90'
 wait '#'
 sendln 'standby 61 preempt'
 wait '#'
-; HSRP MD5 (HARDENING.md 3.1). Same key on DSW1 and DSW2.
+; HSRP MD5 (same key on both DSWs)
 sendln 'standby 61 authentication md5 key-string GsHsrp2026'
 wait '#'
 sendln 'standby 61 track 10 decrement 30'
@@ -765,7 +748,7 @@ sendln 'standby 67 priority 90'
 wait '#'
 sendln 'standby 67 preempt'
 wait '#'
-; HSRP MD5 (HARDENING.md 3.1). Same key on DSW1 and DSW2.
+; HSRP MD5 (same key on both DSWs)
 sendln 'standby 67 authentication md5 key-string GsHsrp2026'
 wait '#'
 sendln 'standby 67 track 10 decrement 30'
@@ -791,13 +774,12 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; STATIC ROUTE: REQUIRED (OSPF does NOT provide it).
-; OSPF runs only in the global table. VRF OOB has no routing protocol, so this
-; is the only way management traffic leaves the 172.16.0.32/28 subnet via R1.
+; Default route for management traffic (via R1). Required: OSPF only runs in
+; the global table, not in VRF OOB.
 sendln 'ip route vrf OOB 0.0.0.0 0.0.0.0 172.16.0.33'
 wait '#'
 
-; 14. OSPF Routing (Area 0)
+; 14. OSPF area 0
 sendln 'router ospf 1'
 wait '#'
 sendln 'router-id 3.3.3.3'
@@ -834,7 +816,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 15. AAA, SSH, NTP & Syslog
+; 15. AAA (two TACACS+ servers), SSH, NTP and syslog
 sendln 'aaa new-model'
 wait '#'
 
@@ -926,8 +908,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; The image has vty 16-31 open for SSH with no access-class, which would
-; bypass MGMT-ONLY. Close them. (Harmless error if this model has no vty 16+.)
+; This image also opens vty 16-31 for SSH without the ACL, so close them.
+; (Harmless error if the switch has no vty 16+.)
 sendln 'line vty 16 31'
 wait '#'
 sendln 'transport input none'
@@ -935,14 +917,14 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Web UI off (the school image turns it on; it isn't used).
+; Web UI off (enabled on the school image, not used)
 sendln 'no ip http server'
 wait '#'
 sendln 'no ip http secure-server'
 wait '#'
 
-; NTP authentication (HARDENING.md 1.3). Key must match /etc/chrony/chrony.keys
-; on VM102 and VM106 ('1 MD5 bigBoyNTPkey').
+; Authenticated NTP from the jump hosts. The key must match
+; /etc/chrony/chrony.keys on VM102 and VM106.
 sendln 'ntp authentication-key 1 md5 bigBoyNTPkey'
 wait '#'
 sendln 'ntp trusted-key 1'
@@ -973,21 +955,19 @@ sendln 'logging host 172.16.0.45 vrf OOB'
 wait '#'
 sendln 'logging trap informational'
 wait '#'
-; Local copy in RAM if the syslog servers/OOB are down; logs to SSH sessions
-; after 'terminal monitor' (exec command, typed per session, not in the macro).
+; Keep a copy of the logs in RAM. Use 'terminal monitor' to see them over SSH.
 sendln 'logging buffered 64000 informational'
 wait '#'
 sendln 'logging monitor informational'
 wait '#'
 
-; End Phase 1 config
+; End of phase 1
 sendln 'end'
 wait '#'
 
 ; =====================================================================
-; PHASE 2: PARSER VIEW AND ROLE-BASED ACCESS
+; PHASE 2: parser view for the network engineers
 ; =====================================================================
-
 sendln 'enable view'
 wait 'Password:'
 sendln '4Venison2'
@@ -1028,6 +1008,6 @@ wait '#'
 sendln 'username donkBonkEng2 view eng-view algorithm-type scrypt secret Beef3Venison'
 wait '#'
 
-; End config
+; End of configuration
 sendln 'end'
 wait '#'

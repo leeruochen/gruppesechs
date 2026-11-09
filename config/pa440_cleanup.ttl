@@ -1,36 +1,21 @@
 ; =====================================================================
-; Tera Term Macro Script: PA-440 RULEBASE CLEANUP (Clean Slate)
-; Purpose: Delete ALL security + NAT rules by name so a subsequent
-;          clean run of pa440.ttl lands on a blank, correctly-ordered
-;          rulebase (set-based config is additive, so stale rules from
-;          prior runs must be explicitly removed).
-;
-; Notes:
-;  - Waits on '[edit]' (the PAN-OS config-mode marker printed after each
-;    command) instead of '#', which also appears inside the login banner
-;    and mid-output and caused premature sends / command collisions.
-;  - 'delete rulebase security rules <name>' on a non-existent rule is
-;    harmless (PAN-OS reports it and continues), so this is safe to run
-;    even if some rules were already removed manually.
-;  - Scope: deletes security rules, NAT rules, address-groups, address
-;    objects, and the custom service objects that pa440.ttl recreates.
-;    This clears stale members (e.g. DSW1-IP/DSW2-IP) that accumulate from
-;    PAN-OS additive set-merges. Mgmt/AAA are left intact.
-;  - Section 7 removes the pre-5-Nov interface design (vlan.100 L2 bypass,
-;    vlan.69 server backup and their zones) so pa440.ttl can make eth1/6/7
-;    routed /30s. Safe to re-run once done: deleting a missing object is
-;    harmless.
-;  - Deletion order matters: rules first (they reference objects), then
-;    address-groups (they reference addresses), then addresses and services.
+; PA-440 cleanup - run before pa440.ttl on a PA that already has config
+; PAN-OS 'set' commands add to the config instead of replacing it, so old
+; rules and object members would pile up. This deletes every rule, object,
+; group and service that pa440.ttl creates, plus leftovers from older
+; versions. Deleting something that doesn't exist is harmless, so it's safe
+; to re-run. Management and AAA settings are not touched.
+; Order matters: rules first (they use the objects), then groups, then
+; addresses and services.
 ; =====================================================================
 
-; Connect and enter configuration mode
+; Enter configuration mode
 wait '>'
 sendln 'configure'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 1. DELETE SECURITY RULES (current macro rules)
+; 1. Security rules created by pa440.ttl
 ; ---------------------------------------------------------------------
 sendln 'delete rulebase security rules INBOUND-WEB'
 wait '[edit]'
@@ -58,7 +43,7 @@ sendln 'delete rulebase security rules DENY-ALL'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 2. DELETE SECURITY RULES (stale rules from prior macro versions)
+; 2. More rules, plus rules from older versions
 ; ---------------------------------------------------------------------
 sendln 'delete rulebase security rules ALLOW-OSPF'
 wait '[edit]'
@@ -70,12 +55,19 @@ sendln 'delete rulebase security rules PTSO-DHCP-RELAY'
 wait '[edit]'
 sendln 'delete rulebase security rules DNS-SVR-FORWARD'
 wait '[edit]'
-; Temporary server maintenance rules (HANDOVER.md 8.4), in case they were left in:
+; Temporary rules used for software installs, in case one was left in
 sendln 'delete rulebase security rules TEMP-SVR-UPDATES'
+wait '[edit]'
+sendln 'delete rulebase security rules TEMP-JUMP-TO-SERVERS'
+wait '[edit]'
+sendln 'delete rulebase security rules TEMP-JUMP-UPDATES'
+wait '[edit]'
+; Wazuh agent rule (recreated before DENY-ALL by pa440.ttl)
+sendln 'delete rulebase security rules WAZUH-AGENTS'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 3. DELETE NAT RULES
+; 3. NAT rules from older versions (NAT is now done on R1/R2)
 ; ---------------------------------------------------------------------
 sendln 'delete rulebase nat rules NAT-WEB'
 wait '[edit]'
@@ -89,12 +81,9 @@ sendln 'delete rulebase nat rules NAT-OUTBOUND'
 wait '[edit]'
 sendln 'delete rulebase nat rules TEMP-SVR-NAT'
 wait '[edit]'
-; NAT moved to R1/R2 on 5 Nov: pa440.ttl no longer recreates any NAT rules.
 
 ; ---------------------------------------------------------------------
-; 4. DELETE ADDRESS-GROUPS (must be removed BEFORE their member addresses,
-;    and AFTER the rules above that reference them). This also clears stale
-;    members like DSW1-IP/DSW2-IP that accumulated from prior additive runs.
+; 4. Address groups (before their member addresses)
 ; ---------------------------------------------------------------------
 sendln 'delete address-group STAFF-ATM'
 wait '[edit]'
@@ -106,7 +95,7 @@ sendln 'delete address-group DSWs'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 5. DELETE ADDRESS OBJECTS (includes stale DSW1-IP/DSW2-IP from old runs)
+; 5. Address objects
 ; ---------------------------------------------------------------------
 sendln 'delete address STAFF'
 wait '[edit]'
@@ -132,6 +121,8 @@ sendln 'delete address WEB-SVR'
 wait '[edit]'
 sendln 'delete address DNS-SVR'
 wait '[edit]'
+sendln 'delete address CACHE-DNS'
+wait '[edit]'
 sendln 'delete address JUMP-SVR'
 wait '[edit]'
 sendln 'delete address JUMP2-SVR'
@@ -152,31 +143,30 @@ sendln 'delete address DSW1-SVI'
 wait '[edit]'
 sendln 'delete address DSW2-SVI'
 wait '[edit]'
-; Stale objects from earlier macro versions (safe if they do not exist):
+; Objects from older versions
 sendln 'delete address DSW1-IP'
 wait '[edit]'
 sendln 'delete address DSW2-IP'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 6. DELETE SERVICE OBJECTS recreated by the main macro
+; 6. Service objects and the schedule
 ; ---------------------------------------------------------------------
 sendln 'delete service TCP-2222'
 wait '[edit]'
 sendln 'delete service UDP-67'
 wait '[edit]'
+sendln 'delete service WAZUH-AGENT'
+wait '[edit]'
 
-; Schedule: the live box has 'recurring daily'; pa440.ttl recreates it as
-; weekdays only (matches the ASA time-range). Safe here: TXN-INTERNET-TIMED,
-; the only rule using it, was deleted in section 1.
+; The only rule using it was deleted above; pa440.ttl recreates it.
 sendln 'delete schedule TXN-WINDOW'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 7. REMOVE THE OLD BYPASS / SERVER-BACKUP INTERFACES (5 Nov redesign)
-;    Order: OSPF and VR membership -> zone membership -> zones -> VLAN
-;    objects -> VLAN interfaces -> layer2 port config. A port can't change
-;    from layer2 to layer3 until its layer2 config and zone are gone.
+; 7. Old interface design (vlan.100 bypass, vlan.69 server backup), so
+;    pa440.ttl can make eth1/6 and eth1/7 routed. Order: OSPF and router
+;    membership, zones, VLANs, VLAN interfaces, then the layer 2 port config.
 ; ---------------------------------------------------------------------
 sendln 'delete network virtual-router default protocol ospf area 0.0.0.0 interface vlan.100'
 wait '[edit]'
@@ -208,13 +198,12 @@ sendln 'delete network interface ethernet ethernet1/7 layer2'
 wait '[edit]'
 sendln 'delete network interface ethernet ethernet1/8 layer2'
 wait '[edit]'
-; Untracked static default via R1 (removed 5 Nov). OSPF supplies the default
-; from R1 or R2; this static would blackhole traffic when R1 is down.
+; Old static default route (the default now comes from OSPF)
 sendln 'delete network virtual-router default routing-table ip static-route DEFAULT-OUT'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 8. VERIFY (optional visual check) & COMMIT
+; 8. Show what's left, then commit
 ; ---------------------------------------------------------------------
 sendln 'show rulebase security rules'
 wait '[edit]'

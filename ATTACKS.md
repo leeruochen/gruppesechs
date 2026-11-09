@@ -1,26 +1,24 @@
 ### 1. Lab 1.1 — CAM Table Exhaustion / MAC Flooding
 * **Target Component:** Access switches (`SW1` VLAN 23, `SW2` VLAN 46, `SW3` VLAN 61, `SW4` VLAN 67) on end-user access ports (`Gi1/0/5+`).
 * **Theoretical Mechanism:** An attacker on an access port transmits frames with randomized source MAC addresses to fill the Content Addressable Memory (CAM) table, attempting to force the switch into failing open and broadcasting unicast frames across all ports.
-* **Project Defense:** Port Security (`switchport port-security`, `maximum 5`, `mac-address sticky`, `violation shutdown`) and broadcast/multicast Storm Control (`5.00%`, `action trap`).
-* **Expected Outcome:** Once more than 5 distinct source MAC addresses are seen on the access port, the switch immediately transitions the interface into the `err-disabled` (`psecure-violation`) state, dropping all traffic from that port. It auto-recovers after 300 seconds (`errdisable recovery`).
+* **Project Defense:** Port Security (`switchport port-security`, `maximum 5`, dynamic MACs with `aging time 5` / `aging type inactivity`, `violation restrict`) and broadcast/multicast Storm Control (`5.00%`, `action trap`). (Changed 9 Nov from `sticky` + `violation shutdown`.)
+* **Expected Outcome:** Only the first 5 source MACs on the access port are learned; frames from every further (flooded) MAC are dropped in hardware and logged, and the violation counter rises. The CAM table can't be filled from that port, so the switch never fails open. The port stays up, so a legitimate device already learned on it keeps working.
 * **Defensive Verification Commands (`SW1`–`SW4`):**
   ```text
   show port-security
   show port-security interface GigabitEthernet1/0/5
   show port-security address
-  show interfaces status err-disabled
-  show errdisable recovery
-  show logging | include PORT_SECURITY|PM-4-ERR_DISABLE
+  show logging | include PORT_SECURITY|PSECURE
   ```
-  *(To clear learned sticky MACs after testing: `clear port-security sticky interface GigabitEthernet1/0/5`)*
+  *(Learned MACs age out after 5 min; to clear immediately: `clear port-security dynamic interface GigabitEthernet1/0/5`)*
 
 attack
 - connect to either sw1 ports 5-16, sw2 5-7, sw3 5-6, or sw4 5-7
 - load kali
 - sudo macof to continuously generate random MAC addresses to flood 
-- port goes into err-disabled
-- recover automatically after 300 seconds or manually `clear port-security sticky interface <interface>`
-- show port-security to verify 
+- only 5 MACs are learned; the rest are dropped and logged (`restrict`), port stays up
+- `show port-security interface <interface>`: Security Violation Count rising, Total MAC Addresses 5
+- `show mac address-table count`: does not grow
 ---
 
 ### 2. Lab 1.2 — Switch Spoofing (DTP Trunk Negotiation & Dormant Port Abuse)
@@ -151,7 +149,7 @@ attack
 ### 7. Lab 1.7 — IP & MAC Address Spoofing
 * **Target Component:** End-user access ports (`SW1`–`SW4`) attempting to impersonate another host or subnet (e.g., an unauthorized host spoofing an HR IP `172.16.0.61` or another user's leased IP).
 * **Theoretical Mechanism:** Manually configuring a static IP (and/or MAC address) belonging to another authorized host to bypass Layer 3 ACLs.
-* **Project Defense:** IP Source Guard (`ip verify source`) on all access ports (backed by the DHCP snooping binding table) + sticky Port Security (L2 MAC lock) + DSW SVI inbound ACLs (`ACL_STAFF_IN`, `ACL_ATM_IN`, `ACL_HR_IN`, `ACL_IT_IN`).
+* **Project Defense:** IP Source Guard (`ip verify source`) on all access ports (backed by the DHCP snooping binding table) + Port Security (max 5 dynamic MACs, `restrict`) + DSW SVI inbound ACLs (`ACL_STAFF_IN`, `ACL_ATM_IN`, `ACL_HR_IN`, `ACL_IT_IN`).
 * **Expected Outcome:** Any IP packet entering an access port whose source IP does not match that port's active DHCP Snooping binding entry is dropped in hardware at Layer 2 before reaching the distribution switches.
 * **Defensive Verification Commands (`SW1`–`SW4`):**
   ```text
@@ -203,10 +201,11 @@ attack
 * **Theoretical Mechanism:** External or DMZ attacker probing the public subnet using ICMP echo sweeps, TCP SYN scans, TCP ACK scans (to test stateless rules), or UDP port scans to enumerate live hosts and open ports.
 * **Project Defense:**
   * R1/R2 `WAN-IN` ACL + `no ip unreachables` on `Gi0/0/0` and `Null0` + `Null0` sinkhole route for unused public IPs.
-  * Port-specific static NAT on R1/R2 (only forwards `80/443` -> `.82`, `53` -> `.83`, `2222` -> `.84:22`).
+  * Static NAT on R1/R2: web `.189` is **1:1** to `.82` since 9 Nov (every port reaches the PA, which allows only web and drops/logs the rest); `53` -> `.83` and `2222` -> `.84:22` stay port-specific. (Port-only web NAT used to sink scans at Null0, so the PA never saw them.)
   * Stateful inspection on PA-440 and ASA (drops unsolicited TCP ACK packets with no state table entry).
   * PA-440 Zone Protection profiles `ZP-OUTSIDE` and `ZP-DMZ` with scan protection (`8001` TCP scan, `8002` host sweep, `8003` UDP scan) configured to `block-ip track-by source duration 300`.
 * **Expected Outcome:** Closed/unmapped ports return no ICMP unreachable messages (appearing `filtered`), TCP ACK scans are dropped statefully, and rapid port scans or host sweeps trigger PA-440 Zone Protection to quarantine the scanner's source IP for 300 seconds.
+* **Tested 9 Nov (TEST-PLAN 12.14, 13.20):** `filtered` everywhere except `.185:2222`, `.189:80/443`, `.190:53` — confirmed. The 300 s scanner block was **not** triggered in four attempts: fast scans trip SYN-flood SYN cookies first (scan masked, ports falsely `open`), slow scans stay below the 100-events-in-2-s threshold. Documented limitation; use `nmap --max-rate 80` for a clean result.
 * **Defensive Verification Commands (`R1`/`R2`, `PA-440`):**
   ```text
   ! On R1 / R2:
@@ -380,10 +379,11 @@ attack
 * **Target Component:** All Cisco IOS devices, `ASA-1010`, and `PA-440` when logged in as a Network Engineer (`donkBonkEng1` or `donkBonkEng2`).
 * **Theoretical Mechanism:** A logged-in junior engineer (`donkBonkEng1`) attempts to run high-privilege configuration or destructive commands such as `reload`, `write erase`, `ip access-list ...`, `router ospf 1`, or `username ...`.
 * **Project Defense:**
-  * **TACACS+ Command Authorization (`tac_plus` on `.44`/`.45`):** `net_engineers` group sets `priv-lvl = 7` and `cli-view-name = "eng-view"`, permitting only `show`, `ping`, `traceroute`, and interface `description`/`shutdown`/`no shutdown`, and denying all other commands.
+  * **TACACS+ Command Authorization (`tac_plus-ng` on `.44`/`.45`):** `net_engineers` group sets `priv-lvl = 7` and `cli-view-name = "eng-view"`, permitting only `show`, `ping`, `traceroute`, `configure terminal` and interface `description`/`shutdown`/`no shutdown`, and denying all other commands. On the ASA, `aaa authorization exec authentication-server auto-enable` applies priv 7 at login (9 Nov).
   * **Local Fallback RBAC:** Cisco IOS `parser view eng-view`, ASA `privilege level 5`, and PA-440 `superreader` role.
   * **AAA Accounting:** `aaa accounting exec default start-stop group tac-group` and `aaa accounting commands 15 default stop-only group tac-group` (and ASA `aaa accounting command TACACS`).
 * **Expected Outcome:** Unauthorized commands are rejected (`Command authorization failed` or parser view syntax rejection), and every executed session and command is recorded with user, timestamp, and client IP in the TACACS+ accounting logs on `VM102`/`VM106`.
+* **Tested 9 Nov (TEST-PLAN 11.1, 11.10):** IOS: `router ospf 1` / `reload` refused by `eng-view` with `% Invalid input detected` (before TACACS is asked, so no deny line). ASA: `reload` refused with `Command authorization failed`, logged as `donkBonkEng1 engineer deny reload` in `authz.log`.
 * **Defensive Verification Commands (`Cisco IOS`, `VM102`/`106`):**
   ```text
   ! On Cisco IOS (as bigDonkBonkAdmin):
@@ -391,7 +391,7 @@ attack
   test aaa group tac-group donkBonkEng1 Beef2Venison legacy
 
   ! On VM102 / VM106:
-  sudo tail -n 50 /var/log/tac_plus.acct /var/log/tac_plus.log
+  sudo tail -n 50 /var/log/tac_plus-ng/acct.log /var/log/tac_plus-ng/authz.log
   ```
 
 ---

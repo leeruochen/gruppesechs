@@ -16,15 +16,15 @@ Device key: SW1-SW4 = access switches (Staff/ATM/HR/IT), DSW1/DSW2 = distributio
   - `switchport mode access`
   - `switchport port-security`
   - `switchport port-security maximum 5`
-  - `switchport port-security mac-address sticky`
-  - `switchport port-security violation shutdown`
+  - `switchport port-security violation restrict` (9 Nov: was `shutdown`; drops and logs extra MACs without err-disabling the port)
+  - `switchport port-security aging time 5` + `aging type inactivity` (9 Nov: replaced `mac-address sticky`, which never aged out and blocked moving laptops between ports)
   - `storm-control broadcast level 5.00`
   - `storm-control multicast level 5.00`
   - `storm-control action trap`
   - `errdisable recovery cause psecure-violation` (global, recovers after 300 s)
 - **prevents:** MAC flooding / CAM exhaustion and rogue devices on a user port.
 - **where:** `sw1.ttl` (Gi1/0/5-16), `sw2.ttl` (5-7), `sw3.ttl` (5-6), `sw4.ttl` (5-7).
-- **Note:** `maximum 5` is a deliberate choice. Sticky MACs never age out; free slots with `clear port-security sticky interface <if>`.
+- **Note:** `maximum 5` is a deliberate choice (`plan.md` specified sticky / shutdown / max 2, and max 1 on ATM). Since 9 Nov the MACs are dynamic and age out, so no manual clearing is needed.
 
 ### Lab 1.2: Switch spoofing (Yersinia DTP)
 - **Covers:** default `dynamic auto` ports accept DTP and can be negotiated into a trunk, exposing all VLANs.
@@ -111,7 +111,7 @@ Device key: SW1-SW4 = access switches (Staff/ATM/HR/IT), DSW1/DSW2 = distributio
 - **Covers:** spoofing another host's IP (and MAC) to pass IP-based ACLs. Defence is IPSG (`ip verify source`, optional `mac-check`) fed by DHCP snooping or static bindings.
 - **config:** on every end-user access port
   - `ip verify source`
-  - sticky port-security (see Lab 1.1) covers the MAC side
+  - port-security (see Lab 1.1) limits the MAC side; IPSG here is IP-only (`ip verify source`), not `port-security` mac-check
 - **prevents:** source IP spoofing from user ports.
 - **where:** `sw1-4.ttl`. `ip verify source mac-check` is optional and not applied (HARDENING 4.5).
 
@@ -148,7 +148,7 @@ Device key: SW1-SW4 = access switches (Staff/ATM/HR/IT), DSW1/DSW2 = distributio
     - `schedule TXN-WINDOW` on rule `TXN-INTERNET-TIMED`
 - **prevents:** unauthorised inter-VLAN and server access, Staff/ATM internet access, Txn internet access outside its window.
 - **where:** `dsw1.ttl`, `dsw2.ttl`, `r1.ttl`, `r2.ttl`, `firepower1010.ttl`, `pa440.ttl`.
-- **Open item:** temporary `permit icmp ... any` lines in `ACL_HR_IN` / `ACL_IT_IN` must be removed at final hardening.
+- ~~Open item: temporary `permit icmp ... any` lines~~ **Done 9 Nov:** removed live and from `dsw1.ttl` / `dsw2.ttl`; HR <-> IT ping now fails (TEST-PLAN 10.1).
 
 ### Lab 2.2: Stateful firewalls and MPF
 - **Covers:** ASA `nameif` / security levels, zone ACLs, removing default NAT, MPF (class-map, policy-map, service-policy) for stateful ICMP inspection, state table, packet processing order.
@@ -359,7 +359,7 @@ Device key: SW1-SW4 = access switches (Staff/ATM/HR/IT), DSW1/DSW2 = distributio
 - **config:**
   - Roles:
     - Network Manager `bigDonkBonkAdmin`: IOS priv 15 / ASA priv 15 / PA superuser
-    - Network Engineers `donkBonkEng1/2`: `eng-view` / ASA priv 5 / PA superreader
+    - Network Engineers `donkBonkEng1/2`: `eng-view` / ASA priv 7 from TACACS (priv 5 for the local fallback accounts) / PA superreader
   - `parser view eng-view`:
     - `commands exec include all show`
     - `commands exec include ping`
@@ -383,8 +383,11 @@ Device key: SW1-SW4 = access switches (Staff/ATM/HR/IT), DSW1/DSW2 = distributio
     - `aaa authorization config-commands`
     - `aaa authorization commands 15 default group tac-group local`
   - ASA authorization:
-    - `aaa authorization command TACACS LOCAL` (re-enabled 7 Nov; keep a console open when rebuilding)
-  - tac_plus groups `net_manager` and `net_engineers` (see `plan.md`)
+    - `aaa authentication serial console TACACS LOCAL` + `aaa authentication enable console TACACS LOCAL` (9 Nov: stops the console session running as `enable_15`)
+    - `aaa authorization exec authentication-server auto-enable` (9 Nov: applies the TACACS priv level, 15 or 7, at login)
+    - `aaa authorization command TACACS LOCAL` (on; keep a console open when rebuilding)
+  - tac_plus-ng (`/etc/tac_plus-ng.cfg`) groups `net_manager` -> profile `manager` (priv 15, permit all) and `net_engineers` -> profile `engineer` (priv 7, show/ping/traceroute/interface shutdown etc.)
+  - Verified 9 Nov (TEST-PLAN 11.1, 11.10): IOS engineer refusals come from `eng-view` (`% Invalid input`); ASA engineer `reload` -> `Command authorization failed`, logged as `deny` in `authz.log`
 - **prevents:** privilege escalation and unauthorised config changes (least-privilege RBAC).
 - **where:** all macros (Phase 2 section), `plan.md`.
 
@@ -397,7 +400,7 @@ Device key: SW1-SW4 = access switches (Staff/ATM/HR/IT), DSW1/DSW2 = distributio
   - ASA:
     - `aaa accounting command TACACS`
 - **prevents:** unaudited admin sessions and repudiation of privileged commands.
-- **where:** all IOS macros, `firepower1010.ttl`.
+- **where:** all IOS macros, `firepower1010.ttl`. Logs on VM102/VM106: `/var/log/tac_plus-ng/acct.log` (verified 9 Nov, TEST-PLAN 11.11).
 
 ### Lab 3.5: Network security monitoring (NTP, syslog, NetFlow v9)
 - **Covers:** NTP modes, stratum, NTP authentication and ACLs, syslog severity and destinations, Flexible NetFlow.
@@ -427,7 +430,8 @@ Device key: SW1-SW4 = access switches (Staff/ATM/HR/IT), DSW1/DSW2 = distributio
     - `ip flow monitor bank-flow-monitor input` on routed ports and SVIs
 - **prevents:** NTP time-spoofing (protects `TXN-WINDOW` and log correlation), log loss on reload, blind spots in traffic visibility.
 - **where:** all macros, VM102/VM106 chrony (HANDOVER 8.11).
-- **Check:** `show ntp associations detail` (`authenticated`, `sane`). Wazuh and NetFlow analyzer on the jump hosts are still open items.
+  - SIEM (9 Nov): Wazuh manager on VM102 collects device syslog (udp/514 from `172.16.0.32/28`), PA traffic/threat/system/config logs (`LFP-WAZUH` -> `SYSLOG-JUMP`), 6 agents (VM100/101/103/104/105/107) and Suricata `eve.json`
+- **Check:** `show ntp associations detail` (`authenticated`, `sane`). Wazuh: `sudo /var/ossec/bin/agent_control -l` (TEST-PLAN 12.20-12.25 pass). NetFlow analyzer on the jump hosts is still an open item (12.9/12.10 not run).
 
 ---
 
@@ -440,8 +444,19 @@ Device key: SW1-SW4 = access switches (Staff/ATM/HR/IT), DSW1/DSW2 = distributio
   - `ospf authentication message-digest` and `ospf message-digest-key 1 md5 GsOspf2026` (ASA)
   - PA auth profile `OSPF-MD5` on eth1/3, eth1/6, eth1/7, vlan.10
   - PA `vlan.92` set passive
-  - applied on all 9 OSPF links
+  - applied on all 9 OSPF links (DSW1 Gi1/0/12 had a wrong key until 9 Nov; caught via the PA's forwarded `md5chksum-bad` log)
 - **prevents:** rogue OSPF neighbours, route injection (e.g. fake default from a DMZ server).
+
+### IDS: Suricata (IDS-SURICATA.md, 9 Nov)
+- **config:**
+  - Suricata 6.0.4 on VM102, ET Open rules + custom `local.rules` (sid 1000001 external SSH to jump host, 1000002 directory traversal)
+  - Proxmox `tc mirred` copies all PA <-> DMZ traffic on `eno5` to VM102's capture NIC `ens20` (no IP)
+  - `HOME_NET` = `172.16.0.0/24`; alerts read by Wazuh from `/var/log/suricata/eve.json`
+- **prevents:** attacks hidden inside traffic the PA allows (the PA has no Threat Prevention licence, so no signature IDS of its own).
+
+### Wazuh SIEM (HANDOVER 8.11, 12)
+- **config:** manager 4.14.10 on VM102; syslog `<remote>` udp/514; agents on 6 servers via ASA `SERVER_IN` line 1 + PA `WAZUH-AGENTS` (tcp/1514-1515); PA `LFP-WAZUH` log forwarding
+- **prevents:** blind spots; gives one place to see device, firewall, host and IDS events (rules 4721 config change, 5760 SSH failure, 64502 PA system, TCP Flood, DoS session limit seen 9 Nov).
 
 ### HSRP MD5 (HARDENING 3.1)
 - **config:**
@@ -469,10 +484,11 @@ Device key: SW1-SW4 = access switches (Staff/ATM/HR/IT), DSW1/DSW2 = distributio
 
 ---
 
-## Known gaps (from HANDOVER section 11.4)
+## Known gaps (updated 9 Nov)
 
-- Temporary ICMP permits on DSW `ACL_HR_IN` / `ACL_IT_IN` still to remove.
-- Temporary server-internet rules (HANDOVER 8.4) still live.
-- Inbound-from-internet tests not re-run since hardening.
-- R1 `WAN-IN` redundant `permit icmp any 203.149.210.184 0.0.0.7` still live (removed from macro).
-- Open issue P6: R1/R2 `WAN-IN` tcp/22 and tcp/23 denies reference `.94` instead of the router's own `.93` (R1).
+All gaps listed on 7 Nov are closed: DSW temporary ICMP permits removed; temporary server-internet rules removed (D1); inbound tests re-run (Stages 6, 13); R1 redundant ICMP line removed; P6 fixed (`.93`). Remaining:
+
+- PA TCP Port Scan auto-block could not be triggered (SYN-flood cookies mask fast scans; slow scans stay under the threshold). Documented limitation; scans are still dropped and logged.
+- NetFlow analyzer on the jump hosts not set up (exports reach `.44`/`.45` but nothing reads them).
+- ASA engineers can run `show running-config` (tac_plus `engineer` profile permits all `show`); optional fix in HANDOVER 12 G.
+- R1 track 1 flaps (IP SLA to ISP1); dampening not adopted.

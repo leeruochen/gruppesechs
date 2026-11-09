@@ -1,22 +1,24 @@
 ; =====================================================================
-; Tera Term Macro Script for Palo Alto PA-440 NGFW Configuration
-; Architecture: Full PTSO with Clean Factory Erase & Non-conflicting Objects
-; Target: PA-440 (gruppesechs.sitict.net)
+; PA-440 - perimeter firewall (gruppesechs.sitict.net)
+; Sits between the ASA and the routers, and is the gateway for the DMZ.
+; No NAT here (R1/R2 translate). On a PA that already has config, run
+; pa440_cleanup.ttl first: 'set' commands add to the config, they don't replace it.
+; The macro waits for '[edit]', the prompt PAN-OS prints after each command.
 ; =====================================================================
 
-; Connect and enter configuration mode
+; Enter configuration mode
 wait '>'
 sendln 'configure'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 1. FACTORY DEFAULT CLEANUP (Avoid locks, clashes, and references)
+; 1. Remove the factory defaults
 ; ---------------------------------------------------------------------
-; Remove default factory security rule referencing 'trust'
+; Factory security rule
 sendln 'delete rulebase security rules rule1'
 wait '[edit]'
 
-; Delete default virtual-wire and associated factory zones
+; Factory virtual wire and its zones
 sendln 'delete network virtual-wire default-vwire'
 wait '[edit]'
 sendln 'delete zone trust'
@@ -24,7 +26,7 @@ wait '[edit]'
 sendln 'delete zone untrust'
 wait '[edit]'
 
-; Clear interfaces from any residual virtual-wire or L3 bindings
+; Leftover virtual-wire / layer 3 bindings on the ports
 sendln 'delete network interface ethernet ethernet1/1 virtual-wire'
 wait '[edit]'
 sendln 'delete network interface ethernet ethernet1/2 virtual-wire'
@@ -37,48 +39,52 @@ sendln 'delete network virtual-router default interface ethernet1/2'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 2. BASE SYSTEM SETTINGS & RBAC ACCOUNTS
+; 2. System settings and admin accounts
 ; ---------------------------------------------------------------------
 sendln 'set deviceconfig system hostname PA-440'
 wait '[edit]'
 sendln 'set deviceconfig system domain gruppesechs.sitict.net'
 wait '[edit]'
+; Must be SGT: the TXN-WINDOW schedule runs on the PA's local time.
+sendln 'set deviceconfig system timezone Asia/Singapore'
+wait '[edit]'
+; Hostname format in syslog (what Wazuh decodes)
+sendln 'set deviceconfig setting management hostname-type-in-syslog FQDN'
+wait '[edit]'
 sendln 'set deviceconfig system login-banner "WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS PA-440 IS PROHIBITED."'
 wait '[edit]'
 
-; Out-Of-Band Management Configuration
-; default-gateway 172.16.0.33: REQUIRED (OSPF does NOT provide it).
-; The PA management port is a separate plane from the data-plane virtual router
-; that runs OSPF, so it needs its own gateway.
+; OOB management port. Its gateway (R1) is set here because the management
+; port is separate from the data-plane routing (OSPF).
 sendln 'set deviceconfig system type static ip-address 172.16.0.41 netmask 255.255.255.240 default-gateway 172.16.0.33'
 wait '[edit]'
 sendln 'set deviceconfig system service disable-telnet yes disable-http yes disable-ssh no disable-https no'
 wait '[edit]'
 
-; Permitted OOB Management IPs (One-by-one syntax)
+; Management access only from the two jump hosts
 sendln 'set deviceconfig system permitted-ip 172.16.0.44/32'
 wait '[edit]'
 sendln 'set deviceconfig system permitted-ip 172.16.0.45/32'
 wait '[edit]'
 
-; Admin lockout and idle timeout (HARDENING.md 6.5)
+; Lock an admin out for 5 minutes after 5 failed logins; 10-minute idle timeout
 sendln 'set deviceconfig setting management admin-lockout failed-attempts 5 lockout-time 5'
 wait '[edit]'
 sendln 'set deviceconfig setting management idle-timeout 10'
 wait '[edit]'
 
-; NTP Servers
+; NTP from the jump hosts
 sendln 'set deviceconfig system ntp-servers primary-ntp-server ntp-server-address 172.16.0.44'
 wait '[edit]'
 sendln 'set deviceconfig system ntp-servers secondary-ntp-server ntp-server-address 172.16.0.45'
 wait '[edit]'
-; NTP authentication (HARDENING.md 6.6). Key must match chrony on VM102/VM106.
+; NTP authentication (key must match chrony on VM102/VM106)
 sendln 'set deviceconfig system ntp-servers primary-ntp-server authentication-type symmetric-key key-id 1 algorithm md5 authentication-key bigBoyNTPkey'
 wait '[edit]'
 sendln 'set deviceconfig system ntp-servers secondary-ntp-server authentication-type symmetric-key key-id 1 algorithm md5 authentication-key bigBoyNTPkey'
 wait '[edit]'
 
-; Local Administrator Accounts
+; Local accounts: admin (superuser) and engineers (read-only superreader)
 sendln 'set mgt-config users bigDonkBonkAdmin permissions role-based superuser yes'
 wait '[edit]'
 sendln 'set mgt-config users bigDonkBonkAdmin password'
@@ -107,28 +113,26 @@ sendln 'Beef3Venison'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 3. INTERFACE MANAGEMENT PROFILES
+; 3. Interface management profile (data interfaces answer ping only)
 ; ---------------------------------------------------------------------
 sendln 'set network profiles interface-management-profile PING-ONLY ping yes'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 4. PHYSICAL & LOGICAL INTERFACES
+; 4. Interfaces
 ; ---------------------------------------------------------------------
-; Physical port Ethernet1/1 (Unused - Admin Down)
+; eth1/1 unused
 sendln 'set network interface ethernet ethernet1/1 link-state down'
 wait '[edit]'
 
-; Primary Serial Link to ASA Ethernet1/1 (Routed L3 - Cost 10)
+; eth1/3 -> ASA E1/1 (172.16.0.104/30): the normal path
 sendln 'set network interface ethernet ethernet1/3 layer3 ip 172.16.0.105/30'
 wait '[edit]'
 sendln 'set network interface ethernet ethernet1/3 layer3 interface-management-profile PING-ONLY'
 wait '[edit]'
 
-; Layer 2 Switched Ports (R1/R2 transit VLAN and DMZ)
-; eth1/4 is cabled DIRECTLY to Proxmox eno5 (vmbr2) since 5 Nov, not via DSW2.
-; The DMZ has one gateway (vlan.92 .81) and no backup, so a switch in between
-; added nothing. Untagged, so the VL-DMZ / vlan.92 config below is unchanged.
+; Layer 2 ports: eth1/2 and eth1/5 to the routers (VLAN 10), eth1/4 to the
+; Proxmox host (DMZ, untagged)
 sendln 'set network interface ethernet ethernet1/2 layer2 lldp enable no'
 wait '[edit]'
 sendln 'set network interface ethernet ethernet1/4 layer2 lldp enable no'
@@ -136,16 +140,10 @@ wait '[edit]'
 sendln 'set network interface ethernet ethernet1/5 layer2 lldp enable no'
 wait '[edit]'
 
-; ASA-bypass links, routed /30s (5 Nov redesign, replaces the VLAN 100 bypass)
-; The old design bridged eth1/6 and eth1/7 into one PA VLAN (vlan.100). With
-; Po5 also joining the DSWs, that formed a Layer 2 loop (the PA runs no STP),
-; so both ports had to stay down and failover was manual.
-; Now each port is its own routed /30, so there is nothing to loop:
-;   eth1/6 -> DSW1 G1/0/12  172.16.0.116/30  (PA .117, DSW1 .118)
-;   eth1/7 -> DSW2 G1/0/12  172.16.0.120/30  (PA .121, DSW2 .122)
-; OSPF cost 500 keeps them idle while the ASA path (cost 10) exists. They carry
-; user traffic only when the ASA is unreachable from both DSWs. Both stay UP.
-; (Live migration from the old layer2 config: run pa440_cleanup.ttl first.)
+; ASA bypass links, one routed /30 per DSW:
+;   eth1/6 -> DSW1 Gi1/0/12  172.16.0.116/30  (PA .117, DSW1 .118)
+;   eth1/7 -> DSW2 Gi1/0/12  172.16.0.120/30  (PA .121, DSW2 .122)
+; OSPF cost 500 keeps them idle unless the ASA is unreachable from both DSWs.
 sendln 'set network interface ethernet ethernet1/6 link-state auto'
 wait '[edit]'
 sendln 'set network interface ethernet ethernet1/6 layer3 ip 172.16.0.117/30'
@@ -159,12 +157,11 @@ wait '[edit]'
 sendln 'set network interface ethernet ethernet1/7 layer3 interface-management-profile PING-ONLY'
 wait '[edit]'
 
-; eth1/8 used to be the internal-server backup (vlan.69, .78). REMOVED 5 Nov:
-; the internal servers belong to the ASA only (gateway .73). Unused, admin-down.
+; eth1/8 unused
 sendln 'set network interface ethernet ethernet1/8 link-state down'
 wait '[edit]'
 
-; VLAN SVIs (Logical L3 Interfaces)
+; VLAN interfaces: vlan.10 to the routers, vlan.92 is the DMZ gateway
 sendln 'set network interface vlan units vlan.10 ip 172.16.0.92/29'
 wait '[edit]'
 sendln 'set network interface vlan units vlan.10 interface-management-profile PING-ONLY'
@@ -175,7 +172,7 @@ wait '[edit]'
 sendln 'set network interface vlan units vlan.92 interface-management-profile PING-ONLY'
 wait '[edit]'
 
-; VLAN Membership & Virtual Interfaces
+; VLAN membership
 sendln 'set network vlan OUTSIDE interface [ ethernet1/2 ethernet1/5 ]'
 wait '[edit]'
 sendln 'set network vlan OUTSIDE virtual-interface interface vlan.10'
@@ -187,15 +184,15 @@ sendln 'set network vlan VL-DMZ virtual-interface interface vlan.92'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 5. SECURITY ZONES
+; 5. Security zones
 ; ---------------------------------------------------------------------
 sendln 'set zone outside network layer3 vlan.10'
 wait '[edit]'
 sendln 'set zone outside-l2 network layer2 [ ethernet1/2 ethernet1/5 ]'
 wait '[edit]'
 
-; eth1/6/7 join 'inside' so users arriving over the bypass hit the same rules
-; as users arriving from the ASA (eth1/3).
+; The bypass links are in 'inside' too, so users get the same rules whichever
+; way they arrive.
 sendln 'set zone inside network layer3 [ ethernet1/3 ethernet1/6 ethernet1/7 ]'
 wait '[edit]'
 
@@ -203,13 +200,11 @@ sendln 'set zone dmz network layer3 vlan.92'
 wait '[edit]'
 sendln 'set zone dmz-l2 network layer2 ethernet1/4'
 wait '[edit]'
-; Zones 'server' / 'server-l2' / 'inside-l2' REMOVED 5 Nov (no PA interface in
-; the internal-server VLAN any more; the internal servers are the ASA's zone).
 
-; Zone protection on 'outside' (HARDENING.md 6.1, labs 2.3/2.5): SYN cookies,
-; UDP/ICMP flood limits, block scanners for 300 s (8001 TCP port scan, 8002
-; host sweep, 8003 UDP port scan), drop spoofed sources. Rates count NEW
-; sessions entering 'outside', so return traffic for HR/IT isn't affected.
+; Zone protection on 'outside': SYN cookies, UDP/ICMP flood limits, scanners
+; blocked for 300 s (8001 TCP port scan, 8002 host sweep, 8003 UDP scan),
+; spoofed sources dropped. Rates count new sessions only, so replies to HR/IT
+; aren't affected.
 sendln 'set network profiles zone-protection-profile ZP-OUTSIDE flood tcp-syn enable yes'
 wait '[edit]'
 sendln 'set network profiles zone-protection-profile ZP-OUTSIDE flood tcp-syn syn-cookies alarm-rate 100 activate-rate 200 maximal-rate 2000'
@@ -239,7 +234,7 @@ wait '[edit]'
 sendln 'set zone outside network zone-protection-profile ZP-OUTSIDE'
 wait '[edit]'
 
-; Zone protection on 'dmz' (HARDENING.md 6.2): contain a compromised server.
+; Zone protection on 'dmz': limits what a compromised server can do
 sendln 'set network profiles zone-protection-profile ZP-DMZ discard-ip-spoof yes'
 wait '[edit]'
 sendln 'set network profiles zone-protection-profile ZP-DMZ scan 8001 action block-ip track-by source duration 300'
@@ -254,48 +249,42 @@ sendln 'set zone dmz network zone-protection-profile ZP-DMZ'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 6. VIRTUAL ROUTER & OSPF (PTSO Cost Engineering)
+; 6. Virtual router and OSPF
 ; ---------------------------------------------------------------------
-; The PA has no interface in 172.16.0.72/29 (internal servers). It learns that
-; subnet from the ASA via OSPF (O2 via 172.16.0.106), so traffic to the
-; internal servers always goes through the ASA.
+; The PA learns the internal server subnet from the ASA, so traffic to those
+; servers always passes through the ASA.
 sendln 'set network virtual-router default interface [ ethernet1/3 ethernet1/6 ethernet1/7 vlan.10 vlan.92 ]'
 wait '[edit]'
 sendln 'set network virtual-router default protocol ospf enable yes'
 wait '[edit]'
 sendln 'set network virtual-router default protocol ospf router-id 6.6.6.6'
 wait '[edit]'
-; REQUIRED (found 6 Nov): PAN-OS rejects OSPF default routes unless told not
-; to ('Reject Default Route' is on by default). With DEFAULT-OUT removed, the
-; PA's only default comes from R1/R2 via OSPF; without this line the PA has no
-; default at all and drops all internet traffic (it still floods the LSA, so
-; the ASA and DSWs learn a default that dies at the PA).
+; Required: PAN-OS ignores OSPF default routes unless told otherwise. The PA's
+; only default comes from R1/R2 via OSPF.
 sendln 'set network virtual-router default protocol ospf reject-default-route no'
 wait '[edit]'
 
-; OSPF Area 0 Interfaces
-; Primary Serial Link to ASA (Cost 10)
+; OSPF interfaces: ASA link (cost 10)
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/3 enable yes passive no metric 10'
 wait '[edit]'
 
-; DMZ SVI (Cost 10). Passive (HARDENING.md 6.4): the DMZ subnet is still
-; advertised, but a compromised DMZ server can't form an adjacency and inject
-; routes.
+; DMZ: passive, so the subnet is advertised but a DMZ server can't form an
+; adjacency and inject routes
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.92 enable yes passive yes metric 10'
 wait '[edit]'
 
-; Outside Transit SVI to R1/R2 (Cost 10)
+; Router VLAN (cost 10)
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.10 enable yes passive no metric 10'
 wait '[edit]'
 
-; ASA-bypass links to DSW1 / DSW2 (Cost 500, idle while the ASA path exists)
+; DSW bypass links (cost 500)
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/6 enable yes passive no metric 500'
 wait '[edit]'
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/7 enable yes passive no metric 500'
 wait '[edit]'
 
-; OSPF MD5 (HARDENING.md 7). Same key as R1/R2/ASA/DSWs on every active OSPF
-; link. vlan.92 is passive, so it needs none.
+; OSPF MD5 on every active link (same key everywhere). No static default route:
+; it comes from OSPF (R1 normally, R2 if R1 or ISP1 is down).
 sendln 'set network virtual-router default protocol ospf auth-profile OSPF-MD5 md5 1 key GsOspf2026 preferred yes'
 wait '[edit]'
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface ethernet1/3 authentication OSPF-MD5'
@@ -307,13 +296,8 @@ wait '[edit]'
 sendln 'set network virtual-router default protocol ospf area 0.0.0.0 interface vlan.10 authentication OSPF-MD5'
 wait '[edit]'
 
-; No static default (DEFAULT-OUT removed 5 Nov). The PA takes its default from
-; OSPF: R1 (ISP1, metric 10) normally, R2 (ISP2, metric 50) when R1 or ISP1 is
-; down. An untracked static via .90 would keep pointing at a dead R1 and
-; blackhole everything. pa440_cleanup.ttl deletes it from the live box.
-
 ; ---------------------------------------------------------------------
-; 7. ADDRESS OBJECTS & GROUPS (Fixed GeoIP Clashes: HR-NET & IT-NET)
+; 7. Address objects and groups
 ; ---------------------------------------------------------------------
 sendln 'set address STAFF ip-netmask 172.16.0.0/27'
 wait '[edit]'
@@ -328,7 +312,7 @@ wait '[edit]'
 sendln 'set address DMZ-SUBNET ip-netmask 172.16.0.80/29'
 wait '[edit]'
 
-; Internal Server Hosts
+; Internal servers
 sendln 'set address FILE-SVR ip-netmask 172.16.0.74/32'
 wait '[edit]'
 sendln 'set address ACCT-SVR ip-netmask 172.16.0.75/32'
@@ -338,7 +322,7 @@ wait '[edit]'
 sendln 'set address DHCP-SVR ip-netmask 172.16.0.77/32'
 wait '[edit]'
 
-; DMZ Hosts
+; DMZ servers
 sendln 'set address WEB-SVR ip-netmask 172.16.0.82/32'
 wait '[edit]'
 sendln 'set address DNS-SVR ip-netmask 172.16.0.83/32'
@@ -347,22 +331,20 @@ sendln 'set address JUMP-SVR ip-netmask 172.16.0.84/32'
 wait '[edit]'
 sendln 'set address JUMP2-SVR ip-netmask 172.16.0.85/32'
 wait '[edit]'
+; Caching DNS VM108 (9 Nov)
+sendln 'set address CACHE-DNS ip-netmask 172.16.0.86/32'
+wait '[edit]'
 
-; Public IP objects (PUB-PAT / PUB-WEB / PUB-DNS) REMOVED 5 Nov: NAT moved to
-; R1/R2, so the PA only ever sees the servers' real addresses.
-
-; Upstream resolvers for the DMZ DNS server's forwarders (P5 fix, 4 Nov)
+; Upstream resolvers for the DMZ DNS server
 sendln 'set address DNS-FORWARDERS-1 ip-netmask 8.8.8.8/32'
 wait '[edit]'
 sendln 'set address DNS-FORWARDERS-2 ip-netmask 1.1.1.1/32'
 wait '[edit]'
-; ICT caching DNS server provided by the lab (added 4 Nov). VM101 forwards to it
-; first, because other racks' names (e.g. wkg00n.sitict.net) only exist on the
-; lab DNS, not on the public internet.
+; Lab DNS server. VM101 asks it first, because other racks' names only exist there.
 sendln 'set address ICT-DNS ip-netmask 172.18.4.32/32'
 wait '[edit]'
 
-; Address Groups
+; Address groups
 sendln 'set address-group STAFF-ATM static [ STAFF ATM ]'
 wait '[edit]'
 sendln 'set address-group HR-IT static [ HR-NET IT-NET ]'
@@ -370,33 +352,19 @@ wait '[edit]'
 sendln 'set address-group INTERNET-USERS static [ HR-NET IT-NET ]'
 wait '[edit]'
 
-; DSW1-SVI / DSW2-SVI / DSWs and service UDP-67 REMOVED 5 Nov: only the
-; deleted PTSO-DHCP-RELAY rule (inside -> server) used them.
-
-; Schedules (service TCP-2222 removed 5 Nov: R1/R2 translate 2222 -> 22, so
-; the PA sees jump SSH as plain tcp/22)
+; Transactions server internet window (must match the ASA's time-range)
 sendln 'set schedule TXN-WINDOW schedule-type recurring weekly monday 01:00-03:00 tuesday 01:00-03:00 wednesday 01:00-03:00 thursday 01:00-03:00 friday 01:00-03:00'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 8. NAT RULES: none (5 Nov)
+; 8. Security rules (no NAT rules: R1/R2 translate, so the PA sees real addresses)
 ; ---------------------------------------------------------------------
-; NAT moved to the edge routers so each ISP's public block is translated by
-; the router that owns it (R1: 203.149.210.184/29, R2: 129.126.142.184/29).
-; The PA still enforces every security rule below; it now sees real inside
-; and outside addresses in both directions. pa440_cleanup.ttl deletes the old
-; NAT-WEB, NAT-WEB-HTTPS, NAT-DNS, NAT-JUMP-SSH and NAT-OUTBOUND rules.
-
-; ---------------------------------------------------------------------
-; 9. SECURITY RULES
-; ---------------------------------------------------------------------
-; OSPF Adjacency (inter-zone OSPF must be explicitly allowed on PAN-OS)
+; OSPF between zones must be allowed explicitly
 sendln 'set rulebase security rules ALLOW-OSPF from [ outside inside ] to [ outside inside ] source any destination any source-user any category any application ospf service any action allow log-end no'
 wait '[edit]'
 
-; Inbound DMZ Access
-; 5 Nov: destinations are the servers' REAL addresses. R1/R2 already
-; translated the public IP (and 2222 -> 22) before the packet reaches the PA.
+; Inbound from the internet to the DMZ servers (real addresses; R1/R2 have
+; already translated the public IP and port)
 sendln 'set rulebase security rules INBOUND-WEB from outside to dmz source any destination WEB-SVR source-user any category any application [ web-browsing ssl ] service application-default action allow log-end yes'
 wait '[edit]'
 sendln 'set rulebase security rules INBOUND-DNS from outside to dmz source any destination DNS-SVR source-user any category any application dns service application-default action allow log-end yes'
@@ -404,23 +372,16 @@ wait '[edit]'
 sendln 'set rulebase security rules JUMP-SSH-IN from outside to dmz source any destination JUMP-SVR source-user any category any application ssh service application-default action allow log-end yes'
 wait '[edit]'
 
-; Internal Inter-VLAN Transit
-sendln 'set rulebase security rules INTERNAL-TO-DNS from inside to dmz source INTERNET-USERS destination DNS-SVR source-user any category any application dns service application-default action allow log-end yes'
+; Users to the DMZ
+sendln 'set rulebase security rules INTERNAL-TO-DNS from inside to dmz source INTERNET-USERS destination [ DNS-SVR CACHE-DNS ] source-user any category any application dns service application-default action allow log-end yes'
 wait '[edit]'
 sendln 'set rulebase security rules INTERNAL-TO-WEB from inside to dmz source INTERNET-USERS destination WEB-SVR source-user any category any application [ web-browsing ssl ] service application-default action allow log-end yes'
 wait '[edit]'
 sendln 'set rulebase security rules IT-TO-JUMP-SSH from inside to dmz source IT-NET destination [ JUMP-SVR JUMP2-SVR ] source-user any category any application ssh service application-default action allow log-end yes'
 wait '[edit]'
-; PTSO-HR-TO-FILE, PTSO-STAFF-ATM-SVR and PTSO-DHCP-RELAY (inside -> server)
-; REMOVED 5 Nov with the PA's internal-server interface. They only applied to
-; the old eth1/8 backup path. Internal-server access is enforced by the ASA.
 
-; Outbound Internet Access. plan.md gives HR and IT full internet access, so
-; any application. (6 Nov: the old App-ID list [ web-browsing ssl dns ping ]
-; broke YouTube/Google: App-ID labels them youtube-base, google-base, quic, not
-; ssl, so they fell through to DENY-ALL.) The rule is still limited by source
-; (HR/IT only) and zone (inside -> outside); internal and DMZ access are
-; controlled by the DSW ACLs, the ASA and the inside -> dmz rules above.
+; HR and IT get full internet access (any application). Internal and DMZ access
+; is controlled by the DSW ACLs, the ASA and the rules above.
 sendln 'set rulebase security rules HR-IT-INTERNET from inside to outside source INTERNET-USERS destination any source-user any category any application any service any action allow log-end yes'
 wait '[edit]'
 sendln 'set rulebase security rules TXN-INTERNET-TIMED from inside to [ outside dmz ] source TXN-SVR destination any source-user any category any application [ web-browsing ssl dns ] service application-default schedule TXN-WINDOW action allow log-end yes'
@@ -428,13 +389,11 @@ wait '[edit]'
 sendln 'set rulebase security rules DMZ-OUTBOUND-NTP from dmz to outside source [ JUMP-SVR JUMP2-SVR ] destination any source-user any category any application [ ntp dns ] service application-default action allow log-end yes'
 wait '[edit]'
 
-; DMZ DNS server recursion to upstream forwarders (P5 fix, applied live 4 Nov).
-; NAT: DNS-SVR is in the routers' NAT-SOURCES ACL, so these queries leave as
-; the router's PAT address (.185 of whichever ISP block is in use).
-sendln 'set rulebase security rules DNS-SVR-FORWARD from dmz to outside source DNS-SVR destination [ ICT-DNS DNS-FORWARDERS-1 DNS-FORWARDERS-2 ] source-user any category any application dns service application-default action allow log-end yes'
+; DMZ DNS server forwarding queries to the upstream resolvers
+sendln 'set rulebase security rules DNS-SVR-FORWARD from dmz to outside source [ DNS-SVR CACHE-DNS ] destination [ ICT-DNS DNS-FORWARDERS-1 DNS-FORWARDERS-2 ] source-user any category any application dns service application-default action allow log-end yes'
 wait '[edit]'
 
-; DoS protection per client for the DMZ servers (HARDENING.md 6.3, Slowloris).
+; DoS protection for the DMZ servers: at most 50 sessions per source IP (Slowloris)
 sendln 'set profiles dos-protection DOS-PER-CLIENT type classified'
 wait '[edit]'
 sendln 'set profiles dos-protection DOS-PER-CLIENT resource sessions enabled yes'
@@ -452,12 +411,19 @@ wait '[edit]'
 sendln 'set rulebase dos rules DOS-DMZ-SERVERS protection classified profile DOS-PER-CLIENT classification-criteria address source-ip-only'
 wait '[edit]'
 
-; Default Interzone Deny
+; Wazuh agents on the internal servers -> manager on the jump host (tcp/1514
+; data, tcp/1515 enrolment). Must come before DENY-ALL.
+sendln 'set service WAZUH-AGENT protocol tcp port 1514-1515'
+wait '[edit]'
+sendln 'set rulebase security rules WAZUH-AGENTS from inside to dmz source SERVERS destination JUMP-SVR source-user any category any application any service WAZUH-AGENT action allow log-end yes log-setting LFP-WAZUH'
+wait '[edit]'
+
+; Deny and log everything else between zones
 sendln 'set rulebase security rules DENY-ALL rule-type interzone from any to any source any destination any source-user any category any application any service any action deny log-end yes'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 10. MANAGEMENT PROFILES: TACACS+ & SYSLOG
+; 9. TACACS+, admin authentication and syslog
 ; ---------------------------------------------------------------------
 sendln 'set shared server-profile tacplus TACACS server JUMP address 172.16.0.44 secret bigBoy@ServerPassword1'
 wait '[edit]'
@@ -470,13 +436,74 @@ wait '[edit]'
 sendln 'set shared server-profile tacplus TACACS retry 2'
 wait '[edit]'
 
+; Admin logins go to TACACS first; the local accounts are used only when both
+; TACACS servers are unreachable.
+sendln 'set shared authentication-profile AUTH-TACACS method tacplus server-profile TACACS'
+wait '[edit]'
+sendln 'set shared authentication-profile AUTH-TACACS allow-list all'
+wait '[edit]'
+sendln 'set shared authentication-profile AUTH-LOCAL method local-database'
+wait '[edit]'
+sendln 'set shared authentication-profile AUTH-LOCAL allow-list all'
+wait '[edit]'
+sendln 'set shared authentication-sequence SEQ-ADMIN authentication-profiles [ AUTH-TACACS AUTH-LOCAL ]'
+wait '[edit]'
+sendln 'set deviceconfig system authentication-profile SEQ-ADMIN'
+wait '[edit]'
+
 sendln 'set shared log-settings syslog SYSLOG-JUMP server JUMP server 172.16.0.44 transport UDP port 514 format BSD facility LOG_USER'
 wait '[edit]'
 sendln 'set shared log-settings syslog SYSLOG-JUMP server JUMP2 server 172.16.0.45 transport UDP port 514 format BSD facility LOG_USER'
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 11. COMMIT CONFIGURATION
+; 10. Log forwarding to Wazuh. SYSLOG-JUMP above is only the destination;
+;     nothing is sent until these profiles and match lists are attached.
+; ---------------------------------------------------------------------
+; Traffic and threat logs
+sendln 'set shared log-settings profiles LFP-WAZUH match-list ML-TRAFFIC log-type traffic filter "All Logs" send-syslog SYSLOG-JUMP'
+wait '[edit]'
+sendln 'set shared log-settings profiles LFP-WAZUH match-list ML-THREAT log-type threat filter "All Logs" send-syslog SYSLOG-JUMP'
+wait '[edit]'
+; System logs (incl. admin login failures and lockouts) and config logs
+sendln 'set shared log-settings system match-list ML-SYS filter "All Logs" send-syslog SYSLOG-JUMP'
+wait '[edit]'
+sendln 'set shared log-settings config match-list ML-CFG filter "All Logs" send-syslog SYSLOG-JUMP'
+wait '[edit]'
+; Attach the profile to every logged rule. ALLOW-OSPF is left out (no logging);
+; WAZUH-AGENTS already has it.
+sendln 'set rulebase security rules INBOUND-WEB log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set rulebase security rules INBOUND-DNS log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set rulebase security rules JUMP-SSH-IN log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set rulebase security rules INTERNAL-TO-DNS log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set rulebase security rules INTERNAL-TO-WEB log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set rulebase security rules IT-TO-JUMP-SSH log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set rulebase security rules HR-IT-INTERNET log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set rulebase security rules TXN-INTERNET-TIMED log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set rulebase security rules DMZ-OUTBOUND-NTP log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set rulebase security rules DNS-SVR-FORWARD log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set rulebase security rules DENY-ALL log-setting LFP-WAZUH'
+wait '[edit]'
+; DoS rule and zone protection logs
+sendln 'set rulebase dos rules DOS-DMZ-SERVERS log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set zone outside network log-setting LFP-WAZUH'
+wait '[edit]'
+sendln 'set zone dmz network log-setting LFP-WAZUH'
+wait '[edit]'
+
+; ---------------------------------------------------------------------
+; 11. Commit
 ; ---------------------------------------------------------------------
 sendln 'commit'
 wait 'Configuration committed successfully'

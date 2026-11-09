@@ -1,5 +1,7 @@
 ; =====================================================================
-; Tera Term Macro Script for R1 PTSO Configuration
+; R1 - edge router, ISP1 (Primary)
+; WAN 172.17.9.93/30 to ISP1, public block 203.149.210.184/29 (NAT is done here).
+; Advertises the OSPF default route (metric 10) while ISP1 is reachable.
 ; =====================================================================
 
 ; Enter enable mode
@@ -13,7 +15,7 @@ wait '#'
 sendln 'configure terminal'
 wait '#'
 
-; Base System Setup
+; Base system settings
 sendln 'hostname R1'
 wait '#'
 sendln 'no ip domain lookup'
@@ -24,26 +26,24 @@ sendln 'service password-encryption'
 wait '#'
 sendln 'service timestamps log datetime msec localtime'
 wait '#'
-; Syslog: no console logging (keeps macro/console output clean). Logs still go to
-; the RAM buffer (show logging) and the syslog servers.
+; No console logging (keeps the macro output readable). Logs still go to the
+; RAM buffer and the syslog servers.
 sendln 'no logging console'
 wait '#'
 sendln 'clock timezone SGT 8 0'
 wait '#'
 
-; Banner MOTD
-; One line, '$' as the delimiter. The old '^C' was sent as two literal
-; characters, so IOS used '^' as the delimiter and printed a stray 'C'.
+; Login banner ('$' is the delimiter)
 sendln 'banner motd $WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS R1 IS PROHIBITED.$'
 wait '#'
 
-; 1. Root Enable Secret & Manager Local Account
+; 1. Enable secret and local admin account
 sendln 'enable algorithm-type scrypt secret 4Venison2'
 wait '#'
 sendln 'username bigDonkBonkAdmin privilege 15 algorithm-type scrypt secret Venison2Beef'
 wait '#'
 
-; 2. Out-of-Band (OOB) VRF Definition
+; 2. Out-of-band management VRF
 sendln 'vrf definition OOB'
 wait '#'
 sendln 'address-family ipv4'
@@ -53,7 +53,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 3. Perimeter WAN-IN ACL & VTY Management ACL
+; 3. Access lists: management (SSH only from the jump hosts), WAN-IN (edge
+; filter on the ISP link) and NAT-SOURCES
 sendln 'ip access-list standard MGMT-ONLY'
 wait '#'
 sendln 'permit host 172.16.0.44'
@@ -65,14 +66,12 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; WAN-IN is checked BEFORE NAT on the outside interface, so the public-block
-; permits below still match the public (pre-translation) addresses.
+; WAN-IN is checked before NAT, so it matches the public addresses.
 sendln 'ip access-list extended WAN-IN'
 wait '#'
-; Anti-spoofing (HARDENING.md 2.1, RFC 2827/3330). NOT 172.16.0.0/12: the lab
-; "internet" (ISP gateways, ICT DNS, lab Wi-Fi resolver) is 172.17/172.18.
-; Only our own 172.16.0.0/24 is denied. The last line drops packets claiming
-; to come from our own public block (smurf, lab 2.4).
+; Anti-spoofing. Only our own 172.16.0.0/24 is denied (not all of 172.16/12:
+; the lab "internet" uses 172.17/172.18). The last deny drops packets claiming
+; to come from our own public block.
 sendln 'deny ip 0.0.0.0 0.255.255.255 any log'
 wait '#'
 sendln 'deny ip 10.0.0.0 0.255.255.255 any log'
@@ -97,6 +96,8 @@ sendln 'deny tcp any host 172.17.9.93 eq 23 log'
 wait '#'
 sendln 'permit icmp host 172.17.9.94 host 172.17.9.93 echo-reply'
 wait '#'
+; Lets replies and inbound web/DNS/jump SSH reach the public block.
+; Never remove this line: it would cut all internet traffic.
 sendln 'permit ip any 203.149.210.184 0.0.0.7'
 wait '#'
 sendln 'permit tcp any host 172.17.9.93 established'
@@ -106,10 +107,9 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; NAT-SOURCES: the only inside addresses R1 will PAT to the internet (5 Nov:
-; NAT moved from the PA to the routers). The PA still decides what may leave;
-; this ACL is a second layer, so Staff/ATM can't get out even if a firewall
-; rule were wrong. Mirrors the PA's outbound rules.
+; The only inside addresses this router translates: HR, IT, the Txn server,
+; the DNS server and the jump hosts. A second layer behind the firewalls, so
+; Staff/ATM can't get out even if a firewall rule were wrong.
 sendln 'ip access-list extended NAT-SOURCES'
 wait '#'
 sendln 'permit ip 172.16.0.56 0.0.0.7 any'
@@ -120,18 +120,17 @@ sendln 'permit ip host 172.16.0.76 any'
 wait '#'
 sendln 'permit ip host 172.16.0.83 any'
 wait '#'
+; caching DNS VM108 (9 Nov)
+sendln 'permit ip host 172.16.0.86 any'
+wait '#'
 sendln 'permit ip host 172.16.0.84 any'
 wait '#'
 sendln 'permit ip host 172.16.0.85 any'
 wait '#'
-; TEMPORARY (HANDOVER.md 8.4): while servers still need package installs, add
-;   permit ip 172.16.0.72 0.0.0.7 any
-;   permit ip 172.16.0.80 0.0.0.7 any
-; by hand and remove them with the PA's TEMP-SVR-UPDATES rule.
 sendln 'exit'
 wait '#'
 
-; 4. Flexible NetFlow v9 Configuration
+; 4. NetFlow v9, exported to both jump hosts over VRF OOB
 sendln 'flow record bank-flow-record'
 wait '#'
 sendln 'description packet flow record for monitoring'
@@ -214,7 +213,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 5. Physical Routed Interfaces
+; 5. Routed interfaces
+; WAN link to ISP1
 sendln 'interface GigabitEthernet0/0/0'
 wait '#'
 sendln 'description WAN_Link_to_ISP1'
@@ -223,9 +223,8 @@ sendln 'ip address 172.17.9.93 255.255.255.252'
 wait '#'
 sendln 'ip access-group WAN-IN in'
 wait '#'
-; HARDENING.md 2.2: uRPF strict + allow-default (internet sources match the
-; default route; inside/public-block sources are dropped), no unreachables
-; (scans see 'filtered'), no CDP towards the ISP.
+; uRPF drops spoofed sources, no ICMP unreachables (scans see 'filtered'),
+; no CDP towards the ISP.
 sendln 'ip verify unicast source reachable-via rx allow-default'
 wait '#'
 sendln 'no ip unreachables'
@@ -245,6 +244,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
+; Link to the PA and the other router (VLAN 10, 172.16.0.88/29)
 sendln 'interface GigabitEthernet0/0/1'
 wait '#'
 sendln 'description Primary_Transit_to_PA440_eth1_5'
@@ -255,7 +255,7 @@ sendln 'ip nat inside'
 wait '#'
 sendln 'ip ospf cost 10'
 wait '#'
-; OSPF MD5 (HARDENING.md 7). Must match R2 G0/0/1 and PA vlan.10.
+; OSPF MD5 (must match R2 and the PA)
 sendln 'ip ospf authentication message-digest'
 wait '#'
 sendln 'ip ospf message-digest-key 1 md5 GsOspf2026'
@@ -271,6 +271,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
+; OOB management interface (VRF OOB)
 sendln 'interface GigabitEthernet0/1/0'
 wait '#'
 sendln 'description OOB_Management_Gateway_VLAN99'
@@ -288,17 +289,13 @@ wait '#'
 sendln 'exit'
 wait '#'
 
+; Bypass link to ASA E1/5 (cost 500): only used when the PA is down.
 sendln 'interface GigabitEthernet0/1/1'
 wait '#'
 sendln 'description PA_Bypass_Link_to_ASA_E1_5'
 wait '#'
-; 5 Nov: the R1-R2 link is gone (each router now has its own ISP). G0/1/1 is
-; recabled to ASA E1/5 (172.16.0.108/30, R1 .109, ASA .110). Cost 500: only
-; used when the PA is down. R1 then NATs the ASA's traffic itself.
-; The lab image pre-assigns G0/1/1 to the factory 'Mgmt-vrf'. That keeps the
-; interface out of global OSPF and the global routing table. Remove it BEFORE
-; setting the IP: this command deletes any IP address on the interface.
-; Harmless if the VRF is not assigned.
+; The school image puts this port in its factory 'Mgmt-vrf', which keeps it
+; out of OSPF. This command also deletes the port's IP, so the IP is set after.
 sendln 'no vrf forwarding Mgmt-vrf'
 wait '#'
 sendln 'ip address 172.16.0.109 255.255.255.252'
@@ -307,7 +304,7 @@ sendln 'ip nat inside'
 wait '#'
 sendln 'ip ospf cost 500'
 wait '#'
-; OSPF MD5 (HARDENING.md 7). Must match ASA E1/5.
+; OSPF MD5 (must match ASA E1/5)
 sendln 'ip ospf authentication message-digest'
 wait '#'
 sendln 'ip ospf message-digest-key 1 md5 GsOspf2026'
@@ -323,9 +320,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 6. IP SLA 1 (Track ISP1)
-; IP SLA 2 / track 2 (ping the PA .92) were REMOVED 5 Nov: they only guarded
-; the public-block static routes, which no longer exist (NAT is on R1).
+; 6. Track ISP1: ping the ISP gateway every 5 s. While it fails, the default
+; route and the OSPF default are withdrawn.
 sendln 'ip sla 1'
 wait '#'
 sendln 'icmp-echo 172.17.9.94 source-interface GigabitEthernet0/0/0'
@@ -344,9 +340,8 @@ wait '#'
 
 sendln 'ip route 0.0.0.0 0.0.0.0 172.17.9.94 track 1'
 wait '#'
-; OPTIONAL (HARDENING.md 2.3): drop traffic for unused public IPs instead of
-; bouncing it back to the ISP. NAT translates before routing, so .185/.189/.190
-; still work.
+; Drop traffic for unused public IPs instead of bouncing it back to the ISP.
+; NAT runs before routing, so the mapped addresses still work.
 sendln 'ip route 203.149.210.184 255.255.255.248 Null0'
 wait '#'
 sendln 'interface Null0'
@@ -356,30 +351,26 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 7b. NAT (moved from the PA to R1 on 5 Nov; R2 does the same for ISP2)
-; Inside: G0/0/1 (PA) and G0/1/1 (ASA, PA-down path). Outside: G0/0/0 (ISP1).
+; 7. NAT. Inside: G0/0/1 (PA) and G0/1/1 (ASA). Outside: G0/0/0 (ISP1).
 ; Outbound PAT for NAT-SOURCES to 203.149.210.185.
 sendln 'ip nat pool PUB-PAT 203.149.210.185 203.149.210.185 prefix-length 29'
 wait '#'
 sendln 'ip nat inside source list NAT-SOURCES pool PUB-PAT overload'
 wait '#'
-; Inbound port forwards (port-specific, so only these ports reach the DMZ; the
-; PA still filters them by App-ID). 'extendable' lets one public IP carry
-; several port mappings, and lets .185 share the PAT pool above.
-; If IOS rejects the .185:2222 line because .185 is the PAT pool, move the
-; PAT pool to .186 (both lines of the pool) instead.
-sendln 'ip nat inside source static tcp 172.16.0.82 80 203.149.210.189 80 extendable'
-wait '#'
-sendln 'ip nat inside source static tcp 172.16.0.82 443 203.149.210.189 443 extendable'
+; Web server: 1:1 NAT. Every port reaches the PA, which allows only web traffic
+; and drops and logs the rest, so scans are visible to PA zone protection.
+; DNS (.190) and jump SSH (.185:2222) below are port-specific.
+sendln 'ip nat inside source static 172.16.0.82 203.149.210.189'
 wait '#'
 sendln 'ip nat inside source static udp 172.16.0.83 53 203.149.210.190 53 extendable'
 wait '#'
 sendln 'ip nat inside source static tcp 172.16.0.83 53 203.149.210.190 53 extendable'
 wait '#'
+; Jump host SSH. 'extendable' lets .185 also be the PAT address.
 sendln 'ip nat inside source static tcp 172.16.0.84 22 203.149.210.185 2222 extendable'
 wait '#'
 
-; 8. OSPF Routing (Area 0)
+; 8. OSPF area 0
 sendln 'router ospf 1'
 wait '#'
 sendln 'router-id 1.1.1.1'
@@ -396,9 +387,8 @@ sendln 'network 172.16.0.88 0.0.0.7 area 0'
 wait '#'
 sendln 'network 172.16.0.108 0.0.0.3 area 0'
 wait '#'
-; Primary ISP: metric 10 (R2 advertises ISP2 at 50). E1, so every device adds
-; its own path cost and picks R1 while R1 has a default. The default is only
-; advertised while track 1 (ISP1 reachable) is up.
+; Primary default route: metric 10 (R2 uses 50). Type E1, so each
+; device adds its own path cost. Only advertised while track 1 (ISP1) is up.
 sendln 'default-information originate metric 10 metric-type 1'
 wait '#'
 sendln 'log-adjacency-changes'
@@ -406,7 +396,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 9. AAA, SSH, NTP & Syslog
+; 9. AAA (two TACACS+ servers), SSH, NTP and syslog
 sendln 'aaa new-model'
 wait '#'
 
@@ -498,8 +488,8 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; The image has vty 16-31 open for SSH with no access-class, which would
-; bypass MGMT-ONLY. Close them. (Harmless error if this model has no vty 16+.)
+; This image also opens vty 16-31 for SSH without the ACL, so close them.
+; (Harmless error if the router has no vty 16+.)
 sendln 'line vty 16 31'
 wait '#'
 sendln 'transport input none'
@@ -507,14 +497,14 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Web UI off (the school image turns it on; it isn't used).
+; Web UI off (enabled on the school image, not used)
 sendln 'no ip http server'
 wait '#'
 sendln 'no ip http secure-server'
 wait '#'
 
-; NTP authentication (HARDENING.md 1.3). Key must match /etc/chrony/chrony.keys
-; on VM102 and VM106 ('1 MD5 bigBoyNTPkey').
+; Authenticated NTP from the jump hosts. The key must match
+; /etc/chrony/chrony.keys on VM102 and VM106.
 sendln 'ntp authentication-key 1 md5 bigBoyNTPkey'
 wait '#'
 sendln 'ntp trusted-key 1'
@@ -545,21 +535,19 @@ sendln 'logging host 172.16.0.45 vrf OOB'
 wait '#'
 sendln 'logging trap informational'
 wait '#'
-; Local copy in RAM if the syslog servers/OOB are down; logs to SSH sessions
-; after 'terminal monitor' (exec command, typed per session, not in the macro).
+; Keep a copy of the logs in RAM. Use 'terminal monitor' to see them over SSH.
 sendln 'logging buffered 64000 informational'
 wait '#'
 sendln 'logging monitor informational'
 wait '#'
 
-; End Phase 1 config
+; End of phase 1
 sendln 'end'
 wait '#'
 
 ; =====================================================================
-; PHASE 2: PARSER VIEW AND ROLE-BASED ACCESS
+; PHASE 2: parser view for the network engineers
 ; =====================================================================
-
 sendln 'enable view'
 wait 'Password:'
 sendln '4Venison2'
@@ -598,6 +586,6 @@ wait '#'
 sendln 'username donkBonkEng2 view eng-view algorithm-type scrypt secret Beef3Venison'
 wait '#'
 
-; End config
+; End of configuration
 sendln 'end'
 wait '#'

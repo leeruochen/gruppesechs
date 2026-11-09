@@ -120,7 +120,7 @@ Unused ports go to VLAN 727 (blackhole): SW1 Gi1/0/17-24, SW2/SW4 Gi1/0/8-24, SW
 | HR VLAN 61 | 172.16.0.56/29 | VIP .57 | DSW1 .58, DSW2 .59 (active); .60 reserved; DHCP .61-.62 |
 | IT VLAN 67 | 172.16.0.64/29 | VIP .65 | DSW1 .66, DSW2 .67 (active); DHCP .68-.70 |
 | Internal servers VLAN 69 | 172.16.0.72/29 | ASA .73 | File VM103 .74, Accounts VM104 .75, Txn VM105 .76, DHCP VM107 .77 (.78 unused) |
-| DMZ VLAN 92 | 172.16.0.80/29 | PA .81 | Web VM100 .82, DNS VM101 .83, Jump1 VM102 .84, Jump2 VM106 .85 (.86 unused) |
+| DMZ VLAN 92 | 172.16.0.80/29 | PA .81 | Web VM100 .82, DNS VM101 .83, Jump1 VM102 .84, Jump2 VM106 .85, Caching DNS VM108 .86 |
 | Router-PA transit (PA VLAN 10) | 172.16.0.88/29 | n/a | R1 .90, R2 .91, PA .92 |
 | ASA-DSW1 | 172.16.0.96/30 | n/a | ASA E1/3 .97, DSW1 Gi1/0/11 .98 |
 | ASA-DSW2 | 172.16.0.100/30 | n/a | ASA E1/4 .101, DSW2 Gi1/0/11 .102 |
@@ -151,6 +151,7 @@ HSRP v2 groups use the VLAN number (23, 46, 61, 67). DSW1 priority 110 for 23/46
 | 105 | Transactions | vmbr1 | 172.16.0.76/29 | .73 ASA |
 | 106 | TACACS2 / Jump2 | vmbr3 + vmbr2 | .45/28 + .85/29 | .81 (ens19) |
 | 107 | DHCP | vmbr1 | 172.16.0.77/29 | .73 ASA |
+| 108 | Caching DNS (BIND, recursive only; clone of VM101, added 9 Nov) | vmbr2 | 172.16.0.86/29 | .81 PA |
 
 The jump hosts are dual-homed (OOB + DMZ). Draw them touching both networks.
 
