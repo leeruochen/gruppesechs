@@ -3,7 +3,7 @@
 **Last updated:** 9 November 2026 (corrections from the 9 Nov test run, `changes.md` Parts 11.3, 13, 15)
 
 Things that can only be done once the final details are given on the day.
-The attack demo runbook is **section 3**; the TXN-window and readiness items are below it.
+The attack demo runbook is **section 3**; the TXN-window and readiness items are below it. What the ASA and PA allow and deny is in **section 4**.
 
 ---
 
@@ -279,3 +279,89 @@ Closes on the management plane. No flashy tooling, strong enterprise signal.
 - Any scene that misbehaves live: switch to the pre-captured screenshot/log for that scene and move on. Don't debug in front of the audience.
 - Reset between runs: `clear ip dhcp snooping binding` for L2 scenes (port-security MACs are dynamic since 9 Nov and age out on their own; `clear port-security dynamic interface <if>` if needed); any PA scan block-list entry clears itself after 300 s; wait ~30 s after a SYN flood before the next scan.
 - Scene 1 (DHCP starvation) was **not rehearsed** on 9 Nov (TEST-PLAN 14.3). Rehearse it once before the day, or rely on the pre-captured evidence.
+---
+
+## 4. Firewall policy reference (ASA and PA)
+
+Use this to answer "what does each firewall allow?" during the demo. Taken from `firepower1010.ttl` and `pa440.ttl`, which match the live configs (9 Nov `runshow.md` audit). User traffic passes the ASA first and then the PA, so a flow must be allowed by both.
+
+### 4.1 ASA (Firepower 1010)
+
+**Allowed from users** (`INSIDE_IN`, on `inside` from DSW1 and `inside2` from DSW2), in rule order:
+
+| Source | Destination | Traffic |
+|---|---|---|
+| any | any | OSPF |
+| DSW SVIs and link IPs (`DSW-SVIS`) | DHCP server .77 | udp/67 (DHCP relay) |
+| HR | File server .74 | tcp/445 (SMB) and ICMP |
+| Staff, ATM | Accounts .75, Txn .76 | all IP |
+| HR, IT | DNS .83, caching DNS .86 | udp and tcp 53 |
+| HR, IT | Web .82 | tcp 80, 443 |
+| IT | Jump hosts .84, .85 | tcp/22 (SSH) |
+| HR, IT | anything else (in practice, the internet) | all IP |
+
+**Allowed from internal servers** (`SERVER_IN`, on `server`):
+
+| Source | Destination | Traffic |
+|---|---|---|
+| DHCP .77 | DSW SVIs | udp/67 → 67 (DHCP replies) |
+| Internal servers (172.16.0.72/29) | Wazuh manager on .84 | tcp 1514-1515 |
+| Txn .76 | internet | tcp 80, 443, only in `TXN-WINDOW` (section 1) |
+
+**Allowed from the PA and routers** (`OUTSIDE_IN`, on `outside`, `wan-backup`, `wan-backup2`): OSPF only. Replies to allowed connections return through the stateful connection table.
+
+**Management:** SSH to the ASA only from .44 and .45 on the management interface. HTTP server (ASDM) is off.
+
+**Not allowed** (all denies are logged):
+- Users to the internal servers other than the lines above (e.g. HR/IT to Accounts or Txn, IT to the file server, Staff/ATM to the file server).
+- Users to the DMZ other than the lines above (e.g. HR to the jump hosts, Staff/ATM to web or DNS, ICMP from users to the DMZ).
+- Staff and ATM to anything other than Accounts and Txn, so no internet.
+- Internal servers opening connections to anything in 172.16.0.0/25 (users, DMZ, other subnets), except Wazuh to .84.
+- Internal servers to the internet, except Txn on 80/443 inside the window.
+- Anything starting from outside: the internet, the PA, the DMZ, the routers (e.g. the jump hosts can't SSH into the internal servers).
+
+**Protection:**
+- Traffic to the internal servers: max 500 connections, 50 embryonic, 50 per client, 10 embryonic per client, 15 s embryonic timeout.
+- Basic threat detection on.
+- Stateful ICMP inspection.
+
+### 4.2 PA-440
+
+**Allowed** (rule order):
+
+| # | Rule | From → To | Source → Destination | App / service |
+|---|---|---|---|---|
+| 1 | ALLOW-OSPF | outside, inside ↔ outside, inside | any | ospf |
+| 2 | INBOUND-WEB | outside → dmz | any → Web .82 | web-browsing, ssl (default ports 80/443) |
+| 3 | INBOUND-DNS | outside → dmz | any → DNS .83 | dns |
+| 4 | JUMP-SSH-IN | outside → dmz | any → Jump1 .84 | ssh (R1/R2 forward public tcp/2222 to port 22) |
+| 5 | INTERNAL-TO-DNS | inside → dmz | HR, IT → .83, .86 | dns |
+| 6 | INTERNAL-TO-WEB | inside → dmz | HR, IT → .82 | web-browsing, ssl |
+| 7 | IT-TO-JUMP-SSH | inside → dmz | IT → .84, .85 | ssh |
+| 8 | HR-IT-INTERNET | inside → outside | HR, IT → any | any app, any service |
+| 9 | TXN-INTERNET-TIMED | inside → outside, dmz | Txn .76 → any | web-browsing, ssl, dns, only in `TXN-WINDOW` |
+| 10 | DMZ-OUTBOUND-NTP | dmz → outside | Jump hosts .84, .85 → any | ntp, dns |
+| 11 | DNS-SVR-FORWARD | dmz → outside | .83, .86 → ICT DNS 172.18.4.32, 8.8.8.8, 1.1.1.1 | dns |
+| 12 | WAZUH-AGENTS | inside → dmz | internal servers → .84 | tcp 1514-1515 |
+| 13 | DENY-ALL | any → any (interzone) | any | deny, logged |
+
+**Management:** the MGT port allows SSH and HTTPS. Telnet and HTTP are disabled.
+
+**Not allowed:**
+- From the internet: everything except web .82 on 80/443, DNS .83 on 53 and SSH to .84. Jump2 .85, caching DNS .86 and everything inside are unreachable. App-ID also drops non-web traffic on 80/443.
+- Staff and ATM: anything through the PA (no internet, no DMZ).
+- DMZ servers starting connections outward: the web server can't reach the internet, the DNS servers only reach their three forwarders, the jump hosts only use NTP and DNS.
+- DMZ to inside: no new connections from the DMZ to users or internal servers.
+- Internal servers to the internet, except Txn inside its window.
+- HR SSH to the jump hosts, and users to the DMZ other than DNS, web and the IT SSH rule.
+
+**Protection:**
+- Zone protection on `outside` (`ZP-OUTSIDE`): SYN cookies 100/200/2000 (alarm/activate/max), UDP flood 500/1000/5000, ICMP flood 50/100/500. TCP port scans, host sweeps and UDP scans block the source for 300 s. Spoofed sources dropped.
+- Zone protection on `dmz` (`ZP-DMZ`): spoofed sources dropped; port scans and host sweeps block the source for 300 s.
+- DoS rule `DOS-DMZ-SERVERS`: max 50 concurrent sessions per source IP to .82, .83 and .84 (Slowloris).
+
+### 4.3 Known gaps (open in `TEST-PLAN.md`)
+
+- **P3, Txn has no DNS.** The ASA's Txn → DNS .83 line in the window never matches: the earlier `deny ip SERVERS INTERNAL` line catches it first (172.16.0.0/25 includes .83). The PA would allow it. Txn reaches the internet in its window only by IP address.
+- **P11, DHCP renewals.** Unicast renewals from clients straight to .77 are denied by `INSIDE_IN` (only relay from the DSW SVIs is permitted). Clients fall back to broadcast and still renew, so the impact is low.
+- **PA intrazone traffic.** `DENY-ALL` is interzone only and PAN-OS allows intrazone traffic by default, so DMZ servers can reach each other (e.g. web server to jump host). There is no intrazone override in the macro.
