@@ -1,9 +1,6 @@
 ; =====================================================================
 ; PA-440 - perimeter firewall (gruppesechs.sitict.net)
 ; Sits between the ASA and the routers, and is the gateway for the DMZ.
-; No NAT here (R1/R2 translate). On a PA that already has config, run
-; pa440_cleanup.ttl first: 'set' commands add to the config, they don't replace it.
-; The macro waits for '[edit]', the prompt PAN-OS prints after each command.
 ; =====================================================================
 
 ; Enter configuration mode
@@ -54,8 +51,7 @@ wait '[edit]'
 sendln 'set deviceconfig system login-banner "WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS PA-440 IS PROHIBITED."'
 wait '[edit]'
 
-; OOB management port. Its gateway (R1) is set here because the management
-; port is separate from the data-plane routing (OSPF).
+; OOB management port.
 sendln 'set deviceconfig system type static ip-address 172.16.0.41 netmask 255.255.255.240 default-gateway 172.16.0.33'
 wait '[edit]'
 sendln 'set deviceconfig system service disable-telnet yes disable-http yes disable-ssh no disable-https no'
@@ -78,7 +74,7 @@ sendln 'set deviceconfig system ntp-servers primary-ntp-server ntp-server-addres
 wait '[edit]'
 sendln 'set deviceconfig system ntp-servers secondary-ntp-server ntp-server-address 172.16.0.45'
 wait '[edit]'
-; NTP authentication (key must match chrony on VM102/VM106)
+; NTP authentication
 sendln 'set deviceconfig system ntp-servers primary-ntp-server authentication-type symmetric-key key-id 1 algorithm md5 authentication-key bigBoyNTPkey'
 wait '[edit]'
 sendln 'set deviceconfig system ntp-servers secondary-ntp-server authentication-type symmetric-key key-id 1 algorithm md5 authentication-key bigBoyNTPkey'
@@ -172,7 +168,7 @@ wait '[edit]'
 sendln 'set network interface vlan units vlan.92 interface-management-profile PING-ONLY'
 wait '[edit]'
 
-; VLAN membership
+; VLAN
 sendln 'set network vlan OUTSIDE interface [ ethernet1/2 ethernet1/5 ]'
 wait '[edit]'
 sendln 'set network vlan OUTSIDE virtual-interface interface vlan.10'
@@ -357,7 +353,7 @@ sendln 'set schedule TXN-WINDOW schedule-type recurring weekly monday 01:00-03:0
 wait '[edit]'
 
 ; ---------------------------------------------------------------------
-; 8. Security rules (no NAT rules: R1/R2 translate, so the PA sees real addresses)
+; 8. Security rules
 ; ---------------------------------------------------------------------
 ; OSPF between zones must be allowed explicitly
 sendln 'set rulebase security rules ALLOW-OSPF from [ outside inside ] to [ outside inside ] source any destination any source-user any category any application ospf service any action allow log-end no'
@@ -470,8 +466,6 @@ sendln 'set shared log-settings system match-list ML-SYS filter "All Logs" send-
 wait '[edit]'
 sendln 'set shared log-settings config match-list ML-CFG filter "All Logs" send-syslog SYSLOG-JUMP'
 wait '[edit]'
-; Attach the profile to every logged rule. ALLOW-OSPF is left out (no logging);
-; WAZUH-AGENTS already has it.
 sendln 'set rulebase security rules INBOUND-WEB log-setting LFP-WAZUH'
 wait '[edit]'
 sendln 'set rulebase security rules INBOUND-DNS log-setting LFP-WAZUH'

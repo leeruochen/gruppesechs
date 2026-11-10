@@ -304,14 +304,11 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Default route for management traffic (via R1). Required: the management
-; interface isn't part of OSPF.
+; Default route for management traffic (via R1)
 sendln 'route management 0.0.0.0 0.0.0.0 172.16.0.33 1'
 wait '#'
 
-; 7. OSPF area 0 on the routed transit links only. The Firepower can't run OSPF
-; on switchport-backed VLAN interfaces (multicast join fails), so the server
-; subnet is advertised with 'redistribute connected' instead.
+; 7. OSPF area 0 on the routed transit links only.
 ; Expected neighbours: DSW1, DSW2, PA, R1, R2.
 sendln 'router ospf 1'
 wait '#'
@@ -512,10 +509,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 9. No NAT on the ASA (R1/R2 translate). When the PA is down, traffic goes
-; ASA -> R1/R2 untranslated and the router NATs it.
-;
-; 10. Time window for the Transactions server's internet access
+; 9. Time window for the Transactions server's internet access
 sendln 'time-range TXN-WINDOW'
 wait '#'
 sendln 'periodic weekdays 01:00 to 03:00'
@@ -523,7 +517,7 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; 11. Access lists
+; 10. Access lists
 sendln 'access-list INSIDE_IN extended permit ospf any any'
 wait '#'
 ; DHCP relay. The DSWs relay from each VLAN's SVI, not only their link address.
@@ -563,12 +557,11 @@ sendln 'access-list INSIDE_IN extended deny ip any any log'
 wait '#'
 
 ; DHCP replies back to the relaying DSW SVI. Needed when the reply goes to a
-; different DSW address than the request came from. Must stay above the
-; SERVERS -> INTERNAL deny.
+; different DSW address than the request came from.
 sendln 'access-list SERVER_IN extended permit udp object DHCP-SVR eq bootps object-group DSW-SVIS eq bootps'
 wait '#'
 ; Wazuh agents on the internal servers -> manager on the jump host (tcp/1514
-; data, tcp/1515 enrolment). Must stay above the SERVERS -> INTERNAL deny.
+; data, tcp/1515 enrolment).
 sendln 'access-list SERVER_IN extended permit tcp object SERVERS object JUMP-SVR range 1514 1515'
 wait '#'
 sendln 'access-list SERVER_IN extended deny ip object SERVERS object INTERNAL log'
@@ -668,23 +661,14 @@ wait '#'
 
 sendln 'aaa authentication ssh console TACACS LOCAL'
 wait '#'
-; Console login with a username. Without it, a console 'enable' session has no
-; username, so TACACS command authorization refuses every command.
 sendln 'aaa authentication serial console TACACS LOCAL'
 wait '#'
 sendln 'aaa authentication enable console TACACS LOCAL'
 wait '#'
-; Lock a local account after 5 failed logins (privilege 15 is exempt).
-; Unlock: clear aaa local user lockout username <user>
 sendln 'aaa local authentication attempts max-fail 5'
 wait '#'
-; Use the privilege level TACACS returns (admin 15, engineer 7) and log users
-; straight into privileged mode, so engineers don't need an enable password.
 sendln 'aaa authorization exec authentication-server auto-enable'
 wait '#'
-; Every command is checked by TACACS. Falls back to the local accounts only when
-; TACACS is unreachable (not when it denies). Keep a console session open when
-; rebuilding in case TACACS is down.
 sendln 'aaa authorization command TACACS LOCAL'
 wait '#'
 sendln 'aaa accounting command TACACS'
@@ -699,9 +683,7 @@ wait '#'
 sendln 'no http server enable'
 wait '#'
 
-; Authenticated NTP from the jump hosts (key must match chrony on VM102/VM106).
-; To change the key, just enter a new 'ntp authentication-key 1' line:
-; 'no ntp authentication-key 1' deletes the key whatever value you type.
+; Authenticated NTP from the jump hosts
 sendln 'ntp authentication-key 1 md5 bigBoyNTPkey'
 wait '#'
 sendln 'ntp trusted-key 1'
@@ -724,8 +706,6 @@ sendln 'logging buffered informational'
 wait '#'
 sendln 'logging monitor informational'
 wait '#'
-; Syslog to both jump hosts over the management interface. The "conflicts with
-; route table entry" warning is expected and harmless.
 sendln 'logging host management 172.16.0.44'
 wait '#'
 sendln 'logging host management 172.16.0.45'

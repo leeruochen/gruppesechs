@@ -25,14 +25,12 @@ sendln 'service password-encryption'
 wait '#'
 sendln 'service timestamps log datetime msec localtime'
 wait '#'
-; No console logging (keeps the macro output readable). Logs still go to the
-; RAM buffer and the syslog servers.
 sendln 'no logging console'
 wait '#'
 sendln 'clock timezone SGT 8 0'
 wait '#'
 
-; Login banner ('$' is the delimiter)
+; Login banner
 sendln 'banner motd $WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS SW4 IS PROHIBITED.$'
 wait '#'
 
@@ -82,10 +80,8 @@ sendln 'no ip dhcp snooping information option'
 wait '#'
 sendln 'ip arp inspection vlan 67'
 wait '#'
-; DAI also checks MAC addresses and drops ARP packets with invalid IPs.
 sendln 'ip arp inspection validate src-mac dst-mac ip'
 wait '#'
-; Err-disabled ports come back by themselves after 300 s.
 sendln 'errdisable recovery cause psecure-violation'
 wait '#'
 sendln 'errdisable recovery cause bpduguard'
@@ -167,9 +163,6 @@ sendln 'switchport access vlan 67'
 wait '#'
 sendln 'switchport nonegotiate'
 wait '#'
-; Port security stops MAC flooding: at most 5 MACs per port. MACs are learned
-; dynamically and age out after 5 minutes idle. Extra MACs are dropped and
-; logged ('restrict') without shutting the port.
 sendln 'switchport port-security'
 wait '#'
 sendln 'switchport port-security maximum 5'
@@ -188,10 +181,8 @@ sendln 'ip verify source'
 wait '#'
 sendln 'ip arp inspection limit rate 15'
 wait '#'
-; DHCP starvation protection: over 10 DHCP packets/s err-disables the port.
 sendln 'ip dhcp snooping limit rate 10'
 wait '#'
-; Storm control (log only) and no CDP towards user devices.
 sendln 'storm-control broadcast level 5.00'
 wait '#'
 sendln 'storm-control multicast level 5.00'
@@ -339,8 +330,6 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; This image also opens vty 16-31 for SSH without the ACL, so close them.
-; (Harmless error if the switch has no vty 16+.)
 sendln 'line vty 16 31'
 wait '#'
 sendln 'transport input none'
@@ -348,14 +337,12 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Web UI off (enabled on the school image, not used)
 sendln 'no ip http server'
 wait '#'
 sendln 'no ip http secure-server'
 wait '#'
 
-; Authenticated NTP from the jump hosts. The key must match
-; /etc/chrony/chrony.keys on VM102 and VM106.
+; Authenticated NTP from the jump hosts.
 sendln 'ntp authentication-key 1 md5 bigBoyNTPkey'
 wait '#'
 sendln 'ntp trusted-key 1'
@@ -392,13 +379,9 @@ wait '#'
 sendln 'logging monitor informational'
 wait '#'
 
-; End of phase 1
 sendln 'end'
 wait '#'
 
-; =====================================================================
-; PHASE 2: parser view for the network engineers
-; =====================================================================
 sendln 'enable view'
 wait 'Password:'
 sendln '4Venison2'

@@ -29,14 +29,12 @@ sendln 'service password-encryption'
 wait '#'
 sendln 'service timestamps log datetime msec localtime'
 wait '#'
-; No console logging (keeps the macro output readable). Logs still go to the
-; RAM buffer and the syslog servers.
 sendln 'no logging console'
 wait '#'
 sendln 'clock timezone SGT 8 0'
 wait '#'
 
-; Login banner ('$' is the delimiter)
+; Login banner
 sendln 'banner motd $WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS DSW1 IS PROHIBITED.$'
 wait '#'
 
@@ -909,7 +907,6 @@ sendln 'exit'
 wait '#'
 
 ; This image also opens vty 16-31 for SSH without the ACL, so close them.
-; (Harmless error if the switch has no vty 16+.)
 sendln 'line vty 16 31'
 wait '#'
 sendln 'transport input none'
@@ -917,14 +914,12 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Web UI off (enabled on the school image, not used)
 sendln 'no ip http server'
 wait '#'
 sendln 'no ip http secure-server'
 wait '#'
 
-; Authenticated NTP from the jump hosts. The key must match
-; /etc/chrony/chrony.keys on VM102 and VM106.
+; Authenticated NTP from the jump hosts
 sendln 'ntp authentication-key 1 md5 bigBoyNTPkey'
 wait '#'
 sendln 'ntp trusted-key 1'
@@ -955,19 +950,14 @@ sendln 'logging host 172.16.0.45 vrf OOB'
 wait '#'
 sendln 'logging trap informational'
 wait '#'
-; Keep a copy of the logs in RAM. Use 'terminal monitor' to see them over SSH.
 sendln 'logging buffered 64000 informational'
 wait '#'
 sendln 'logging monitor informational'
 wait '#'
 
-; End of phase 1
 sendln 'end'
 wait '#'
 
-; =====================================================================
-; PHASE 2: parser view for the network engineers
-; =====================================================================
 sendln 'enable view'
 wait 'Password:'
 sendln '4Venison2'

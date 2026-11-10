@@ -1,6 +1,6 @@
 ; =====================================================================
 ; R1 - edge router, ISP1 (Primary)
-; WAN 172.17.9.93/30 to ISP1, public block 203.149.210.184/29 (NAT is done here).
+; WAN 172.17.9.93/30 to ISP1, public block 203.149.210.184/29
 ; Advertises the OSPF default route (metric 10) while ISP1 is reachable.
 ; =====================================================================
 
@@ -26,14 +26,12 @@ sendln 'service password-encryption'
 wait '#'
 sendln 'service timestamps log datetime msec localtime'
 wait '#'
-; No console logging (keeps the macro output readable). Logs still go to the
-; RAM buffer and the syslog servers.
 sendln 'no logging console'
 wait '#'
 sendln 'clock timezone SGT 8 0'
 wait '#'
 
-; Login banner ('$' is the delimiter)
+; Login banner
 sendln 'banner motd $WARNING: UNAUTHORIZED ACCESS TO GRUPPESECHS R1 IS PROHIBITED.$'
 wait '#'
 
@@ -69,9 +67,6 @@ wait '#'
 ; WAN-IN is checked before NAT, so it matches the public addresses.
 sendln 'ip access-list extended WAN-IN'
 wait '#'
-; Anti-spoofing. Only our own 172.16.0.0/24 is denied (not all of 172.16/12:
-; the lab "internet" uses 172.17/172.18). The last deny drops packets claiming
-; to come from our own public block.
 sendln 'deny ip 0.0.0.0 0.255.255.255 any log'
 wait '#'
 sendln 'deny ip 10.0.0.0 0.255.255.255 any log'
@@ -96,8 +91,6 @@ sendln 'deny tcp any host 172.17.9.93 eq 23 log'
 wait '#'
 sendln 'permit icmp host 172.17.9.94 host 172.17.9.93 echo-reply'
 wait '#'
-; Lets replies and inbound web/DNS/jump SSH reach the public block.
-; Never remove this line: it would cut all internet traffic.
 sendln 'permit ip any 203.149.210.184 0.0.0.7'
 wait '#'
 sendln 'permit tcp any host 172.17.9.93 established'
@@ -223,8 +216,6 @@ sendln 'ip address 172.17.9.93 255.255.255.252'
 wait '#'
 sendln 'ip access-group WAN-IN in'
 wait '#'
-; uRPF drops spoofed sources, no ICMP unreachables (scans see 'filtered'),
-; no CDP towards the ISP.
 sendln 'ip verify unicast source reachable-via rx allow-default'
 wait '#'
 sendln 'no ip unreachables'
@@ -294,8 +285,6 @@ sendln 'interface GigabitEthernet0/1/1'
 wait '#'
 sendln 'description PA_Bypass_Link_to_ASA_E1_5'
 wait '#'
-; The school image puts this port in its factory 'Mgmt-vrf', which keeps it
-; out of OSPF. This command also deletes the port's IP, so the IP is set after.
 sendln 'no vrf forwarding Mgmt-vrf'
 wait '#'
 sendln 'ip address 172.16.0.109 255.255.255.252'
@@ -304,7 +293,6 @@ sendln 'ip nat inside'
 wait '#'
 sendln 'ip ospf cost 500'
 wait '#'
-; OSPF MD5 (must match ASA E1/5)
 sendln 'ip ospf authentication message-digest'
 wait '#'
 sendln 'ip ospf message-digest-key 1 md5 GsOspf2026'
@@ -340,8 +328,6 @@ wait '#'
 
 sendln 'ip route 0.0.0.0 0.0.0.0 172.17.9.94 track 1'
 wait '#'
-; Drop traffic for unused public IPs instead of bouncing it back to the ISP.
-; NAT runs before routing, so the mapped addresses still work.
 sendln 'ip route 203.149.210.184 255.255.255.248 Null0'
 wait '#'
 sendln 'interface Null0'
@@ -357,9 +343,6 @@ sendln 'ip nat pool PUB-PAT 203.149.210.185 203.149.210.185 prefix-length 29'
 wait '#'
 sendln 'ip nat inside source list NAT-SOURCES pool PUB-PAT overload'
 wait '#'
-; Web server: 1:1 NAT. Every port reaches the PA, which allows only web traffic
-; and drops and logs the rest, so scans are visible to PA zone protection.
-; DNS (.190) and jump SSH (.185:2222) below are port-specific.
 sendln 'ip nat inside source static 172.16.0.82 203.149.210.189'
 wait '#'
 sendln 'ip nat inside source static udp 172.16.0.83 53 203.149.210.190 53 extendable'
@@ -387,8 +370,6 @@ sendln 'network 172.16.0.88 0.0.0.7 area 0'
 wait '#'
 sendln 'network 172.16.0.108 0.0.0.3 area 0'
 wait '#'
-; Primary default route: metric 10 (R2 uses 50). Type E1, so each
-; device adds its own path cost. Only advertised while track 1 (ISP1) is up.
 sendln 'default-information originate metric 10 metric-type 1'
 wait '#'
 sendln 'log-adjacency-changes'
@@ -488,8 +469,6 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; This image also opens vty 16-31 for SSH without the ACL, so close them.
-; (Harmless error if the router has no vty 16+.)
 sendln 'line vty 16 31'
 wait '#'
 sendln 'transport input none'
@@ -497,14 +476,12 @@ wait '#'
 sendln 'exit'
 wait '#'
 
-; Web UI off (enabled on the school image, not used)
 sendln 'no ip http server'
 wait '#'
 sendln 'no ip http secure-server'
 wait '#'
 
-; Authenticated NTP from the jump hosts. The key must match
-; /etc/chrony/chrony.keys on VM102 and VM106.
+; Authenticated NTP from the jump hosts
 sendln 'ntp authentication-key 1 md5 bigBoyNTPkey'
 wait '#'
 sendln 'ntp trusted-key 1'
@@ -541,13 +518,9 @@ wait '#'
 sendln 'logging monitor informational'
 wait '#'
 
-; End of phase 1
 sendln 'end'
 wait '#'
 
-; =====================================================================
-; PHASE 2: parser view for the network engineers
-; =====================================================================
 sendln 'enable view'
 wait 'Password:'
 sendln '4Venison2'
