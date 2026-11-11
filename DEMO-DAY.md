@@ -193,7 +193,7 @@ Main Palo Alto showcase. Two attacks back to back from **outside**.
 
 Closes on the management plane. No flashy tooling, strong enterprise signal.
 
-- **Command authorization:** SSH in as `donkBonkEng1` (via a jump host). Behaviour differs by platform (verified 9 Nov):
+- **Command authorization:** SSH in as `donkBonkEng1` (via a jump host). Full list of what engineers can and can't run: section 5. Behaviour differs by platform (verified 9 Nov):
   - **ASA (`172.16.0.42`)** — use this for the "Command authorization failed" message. The engineer lands at `#` with privilege 7 (auto-enable):
     ```
     show route              -> allowed
@@ -308,3 +308,50 @@ Use this to answer "what does each firewall allow?" during the demo. Taken from 
 - Zone protection on `outside` (`ZP-OUTSIDE`): SYN cookies 100/200/2000 (alarm/activate/max), UDP flood 500/1000/5000, ICMP flood 50/100/500. TCP port scans, host sweeps and UDP scans block the source for 300 s. Spoofed sources dropped.
 - Zone protection on `dmz` (`ZP-DMZ`): spoofed sources dropped; port scans and host sweeps block the source for 300 s.
 - DoS rule `DOS-DMZ-SERVERS`: max 50 concurrent sessions per source IP to .82, .83 and .84 (Slowloris).
+
+---
+
+## 5. Admin vs engineer command rights
+
+Use this to answer "what can the engineers do?". `bigDonkBonkAdmin` is the Network Manager. `donkBonkEng1` and `donkBonkEng2` are the Network Engineers and have the same rights. Taken from the macros (`r1.ttl`, `dsw1.ttl`, `sw1.ttl`, `firepower1010.ttl`, `pa440.ttl`) and the tac_plus-ng profiles checked on 9 Nov (`changes.md` 1.2.3, 9.3, Part 10).
+
+### 5.1 Summary
+
+| Device | `bigDonkBonkAdmin` | `donkBonkEng1` / `donkBonkEng2` | What enforces it |
+|---|---|---|---|
+| IOS (R1, R2, DSW1, DSW2, SW1-SW4) | privilege 15, every command | parser view `eng-view`, no `enable` (`% Access denied`) | `eng-view` (TACACS returns `cli-view-name = "eng-view"`; the local accounts use `view eng-view`) |
+| ASA | privilege 15, every command | privilege 7 at login (auto-enable), only the commands in the `engineer` profile | TACACS command authorization (`aaa authorization command TACACS LOCAL`) |
+| ASA, TACACS down | local account, privilege 15 | local account, privilege 5 | ASA `privilege ... level 5` lines |
+| PA-440 | `superuser`: full read/write, can `commit` | `superreader`: can view all config and logs, can't change or commit | PAN-OS admin role |
+
+### 5.2 Commands allowed
+
+| Command | Admin | Engineer IOS (`eng-view`) | Engineer ASA (TACACS `engineer`) | Engineer ASA (local, priv 5) |
+|---|---|---|---|---|
+| `show ...` (any) | yes | yes (`include all show`) | yes, including `show running-config` (see note) | the default level-1 `show` commands (e.g. `show version`) plus `show running-config`, `route`, `ospf`, `interface`, `access-list` |
+| `ping`, `traceroute` | yes | yes | yes | yes |
+| `clear ...` | yes | yes | yes | no |
+| `configure terminal` | yes | yes | yes | no |
+| `interface <name>` | yes | yes | yes | no |
+| `shutdown` / `no shutdown` (interface) | yes | yes | yes | no |
+| `description` (interface) | yes | no | yes | no |
+| `switchport ...` (interface) | yes | switches only (not R1/R2) | yes | no |
+| `exit`, `end`, `logout`, `terminal ...` | yes | yes | yes | yes |
+
+### 5.3 Commands refused for engineers (admin only)
+
+Everything not in 5.2. Examples:
+- `reload`, `write memory`, `copy running-config startup-config`, `write erase`. Engineers can shut an interface but can't save the change.
+- `router ospf 1`, `ip access-list ...`, `access-list ...`, `ip route ...`, `vlan ...`.
+- `username ...`, `aaa ...`, `enable secret ...`, `line vty ...`, `crypto ...`.
+- `enable` (engineers can't raise their privilege on IOS or the ASA).
+- PA: any `set`, `delete` or `commit`.
+
+How the refusal looks:
+- IOS: `% Invalid input detected`. The view rejects the command before TACACS is asked, so no deny line in `authz.log`.
+- ASA: `Command authorization failed`, logged in `authz.log` as `donkBonkEng1 engineer deny <command>`.
+
+### 5.4 Notes
+- **`show running-config` on the ASA** is allowed for engineers through TACACS. Blocking it is an open decision (`changes.md` 9.3, HANDOVER 12 G). Don't demo it as refused.
+- **`clear`** is allowed in full on IOS and through TACACS, so engineers can run `clear ip ospf process` or `clear counters`. If asked, this is a known trade-off for troubleshooting.
+- **Local ASA passwords** for `bigDonkBonkAdmin` and `donkBonkEng1` differ from `plan.md` (changed at first login). They are only used when both TACACS servers are down.
